@@ -1,0 +1,73 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Test and coverage
+coverage/
+.nyc_output/
+.vitest/
+junit.xml
+
+# Tool caches
+.eslintcache
+.prettiercache
+.cache/
+.turbo/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment (keep the documented template)
+.env
+.env.*
+!.env.example
+
+# Local keys and certificates (generated with `pnpm keys:generate`)
+keys/
+*.pem
+*.key
+*.crt
+*.p12
+
+# Security scanner reports generated locally
+zap-report.*
+zap-*.html
+zap-*.json
+zap-*.md
+zap-*.xml
+trivy-*.json
+trivy-*.sarif
+*.sarif
+sbom*.json
+sbom*.spdx
+sbom*.spdx.json
+*.cdx.json
+gitleaks-report.*
+reports/
+
+# k6 results
+k6-results/
+k6-summary.json
+tests/k6/results/
+
+# Editors and IDEs
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
