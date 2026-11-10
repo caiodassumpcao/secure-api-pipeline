@@ -1,0 +1,26 @@
+# Lint and format the staged files.
+pnpm exec lint-staged
+
+# Block commits that contain secrets: a local gitleaks binary when available,
+# otherwise the pinned container image (Dependabot does not track this pin).
+GITLEAKS_IMAGE="ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --pre-commit --staged --redact --no-banner .
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  # Same absolute paths inside the container, so the temporary index git uses
+  # for `commit -a` / `commit <path>` (GIT_INDEX_FILE) and worktree metadata
+  # resolve exactly as on the host.
+  repo_root="$(git rev-parse --show-toplevel)"
+  git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+  set -- -v "$repo_root:$repo_root:ro"
+  case "$git_common_dir" in
+    "$repo_root"/*) ;;
+    *) set -- "$@" -v "$git_common_dir:$git_common_dir:ro" ;;
+  esac
+  docker run --rm --network none -u "$(id -u):$(id -g)" \
+    -e GIT_INDEX_FILE -e GIT_DIR -e GIT_WORK_TREE "$@" -w "$repo_root" \
+    "$GITLEAKS_IMAGE" git --pre-commit --staged --redact --no-banner .
+else
+  echo "pre-commit: gitleaks is required. Install it (https://github.com/gitleaks/gitleaks#installing) or start Docker." >&2
+  exit 1
+fi
