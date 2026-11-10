@@ -22,16 +22,16 @@ The API is a small multi-tenant project & task tracker. Small on purpose: the fo
 
 ## Highlights
 
-| | |
-|---|---|
-| 🔐 **Secure by default** | argon2id passwords, short-lived EdDSA JWTs, rotating refresh tokens with reuse detection, lockout and rate limiting |
-| 🏢 **Tenant isolation** | Role-based permissions per workspace, enforced at the data layer and tested for every role × action |
-| 🧪 **Tested** | Unit, integration (real PostgreSQL via Testcontainers), security and DAST suites; ≥ 85 % coverage gate |
-| 🛡️ **DevSecOps pipeline** | Semgrep, CodeQL, Gitleaks, OSV-Scanner, Trivy, OWASP ZAP — all reported to GitHub code scanning |
-| 📦 **Supply chain** | Distroless non-root image, SBOM (SPDX + CycloneDX), cosign keyless signatures, SLSA build provenance |
-| 🚀 **Verified deploys** | Signature checked on the server, migrations, smoke tests, automatic rollback |
-| 📈 **Observable** | OpenTelemetry traces and metrics, logs correlated by `trace_id` |
-| 🧭 **Documented decisions** | Threat model (STRIDE), ADRs, runbook |
+|                             |                                                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 🔐 **Secure by default**    | argon2id passwords, short-lived EdDSA JWTs, rotating refresh tokens with reuse detection, lockout and rate limiting |
+| 🏢 **Tenant isolation**     | Role-based permissions per workspace, enforced at the data layer and tested for every role × action                 |
+| 🧪 **Tested**               | Unit, integration (real PostgreSQL via Testcontainers), security and DAST suites; ≥ 85 % coverage gate              |
+| 🛡️ **DevSecOps pipeline**   | Semgrep, CodeQL, Gitleaks, OSV-Scanner, Trivy, OWASP ZAP — all reported to GitHub code scanning                     |
+| 📦 **Supply chain**         | Distroless non-root image, SBOM (SPDX + CycloneDX), cosign keyless signatures, SLSA build provenance                |
+| 🚀 **Verified deploys**     | Signature checked on the server, migrations, smoke tests, automatic rollback                                        |
+| 📈 **Observable**           | OpenTelemetry traces and metrics, logs correlated by `trace_id`                                                     |
+| 🧭 **Documented decisions** | Threat model (STRIDE), ADRs, runbook                                                                                |
 
 ## Pipeline
 
@@ -68,14 +68,14 @@ flowchart LR
     O -.-> GF[Grafana]
 ```
 
-| Layer | Stack |
-|---|---|
-| Runtime | Node.js 24 LTS · TypeScript (strict) |
-| HTTP | Fastify 5 · zod (validation + OpenAPI) |
-| Data | PostgreSQL 17 · Drizzle ORM · SQL migrations |
-| Auth | argon2id · `jose` (Ed25519 JWT) · rotating refresh tokens |
-| Observability | OpenTelemetry · pino · Prometheus metrics |
-| Delivery | Docker (distroless) · GitHub Actions · GHCR · cosign · Nginx |
+| Layer         | Stack                                                        |
+| ------------- | ------------------------------------------------------------ |
+| Runtime       | Node.js 24 LTS · TypeScript (strict)                         |
+| HTTP          | Fastify 5 · zod (validation + OpenAPI)                       |
+| Data          | PostgreSQL 17 · Drizzle ORM · SQL migrations                 |
+| Auth          | argon2id · `jose` (Ed25519 JWT) · rotating refresh tokens    |
+| Observability | OpenTelemetry · pino · Prometheus metrics                    |
+| Delivery      | Docker (distroless) · GitHub Actions · GHCR · cosign · Nginx |
 
 ## Quick start
 
@@ -113,29 +113,29 @@ curl -s localhost:3000/v1/me -H "authorization: Bearer $TOKEN"
 
 ## API overview
 
-| Resource | Endpoints |
-|---|---|
-| Auth | `POST /v1/auth/register` · `login` · `refresh` · `logout` |
-| Me | `GET /v1/me` |
-| Workspaces | `/v1/workspaces[/:wsId]` |
-| Members | `/v1/workspaces/:wsId/members[/:userId]` |
-| Projects | `/v1/workspaces/:wsId/projects[/:projectId]` |
-| Tasks | `/v1/workspaces/:wsId/projects/:projectId/tasks` · `/v1/workspaces/:wsId/tasks/:taskId` |
-| Audit | `GET /v1/workspaces/:wsId/audit-events` |
-| Health | `/health/live` · `/health/ready` |
+| Resource   | Endpoints                                                                               |
+| ---------- | --------------------------------------------------------------------------------------- |
+| Auth       | `POST /v1/auth/register` · `login` · `refresh` · `logout`                               |
+| Me         | `GET /v1/me`                                                                            |
+| Workspaces | `/v1/workspaces[/:wsId]`                                                                |
+| Members    | `/v1/workspaces/:wsId/members[/:userId]`                                                |
+| Projects   | `/v1/workspaces/:wsId/projects[/:projectId]`                                            |
+| Tasks      | `/v1/workspaces/:wsId/projects/:projectId/tasks` · `/v1/workspaces/:wsId/tasks/:taskId` |
+| Audit      | `GET /v1/workspaces/:wsId/audit-events`                                                 |
+| Health     | `/health/live` · `/health/ready`                                                        |
 
 Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details and always include a `traceId`.
 
 ### Roles
 
-| Action | owner | admin | member | viewer |
-|---|:-:|:-:|:-:|:-:|
-| Read projects & tasks | ✅ | ✅ | ✅ | ✅ |
-| Create / update tasks | ✅ | ✅ | ✅ | — |
-| Manage projects | ✅ | ✅ | — | — |
-| Manage members | ✅ | ✅ | — | — |
-| Read audit log | ✅ | ✅ | — | — |
-| Delete workspace | ✅ | — | — | — |
+| Action                | owner | admin | member | viewer |
+| --------------------- | :---: | :---: | :----: | :----: |
+| Read projects & tasks |  ✅   |  ✅   |   ✅   |   ✅   |
+| Create / update tasks |  ✅   |  ✅   |   ✅   |   —    |
+| Manage projects       |  ✅   |  ✅   |   —    |   —    |
+| Manage members        |  ✅   |  ✅   |   —    |   —    |
+| Read audit log        |  ✅   |  ✅   |   —    |   —    |
+| Delete workspace      |  ✅   |   —   |   —    |   —    |
 
 ## Verify a release image
 
@@ -157,12 +157,12 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 
 ## Part of a platform
 
-| Repository | Role |
-|---|---|
-| [server-hardening-kit](https://github.com/caiodassumpcao/server-hardening-kit) | Hardens the server this API runs on |
-| **secure-api-pipeline** | Builds, secures and ships the API |
-| [drkit](https://github.com/caiodassumpcao/drkit) | Backs up and recovers it |
-| observability-stack *(coming soon)* | Monitors it: metrics, logs, traces, SLO alerts |
+| Repository                                                                     | Role                                           |
+| ------------------------------------------------------------------------------ | ---------------------------------------------- |
+| [server-hardening-kit](https://github.com/caiodassumpcao/server-hardening-kit) | Hardens the server this API runs on            |
+| **secure-api-pipeline**                                                        | Builds, secures and ships the API              |
+| [drkit](https://github.com/caiodassumpcao/drkit)                               | Backs up and recovers it                       |
+| observability-stack _(coming soon)_                                            | Monitors it: metrics, logs, traces, SLO alerts |
 
 ## Roadmap
 

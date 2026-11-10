@@ -1,0 +1,17 @@
+# Single-package repository: this file only holds pnpm settings.
+# Supply-chain policy, see docs/adr/0003-pnpm-and-release-please.md.
+
+# Refuse versions published less than 3 days ago (minutes). Gives the
+# ecosystem time to detect and unpublish compromised releases.
+minimumReleaseAge: 4320
+
+# Fail when a package's trust evidence (trusted publisher / provenance)
+# is weaker than that of its earlier versions.
+trustPolicy: no-downgrade
+
+# Dependency lifecycle scripts are denied unless explicitly approved here.
+strictDepBuilds: true
+allowBuilds: {}
+
+# Fail on dependencies that do not support the Node.js version in use.
+engineStrict: true
