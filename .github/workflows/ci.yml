@@ -1,0 +1,154 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up
+        uses: ./.github/actions/setup
+
+      - name: ESLint and Prettier
+        run: pnpm lint
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up
+        uses: ./.github/actions/setup
+
+      - name: TypeScript
+        run: pnpm typecheck
+
+  unit:
+    name: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up
+        uses: ./.github/actions/setup
+
+      # Fails below the coverage thresholds in vitest.config.ts (85 %).
+      - name: Unit tests with coverage
+        run: pnpm test:coverage
+
+      - name: Publish coverage summary
+        if: ${{ !cancelled() && hashFiles('coverage/coverage-summary.json') != '' }}
+        run: |
+          node --input-type=module -e '
+            import { appendFileSync, readFileSync } from "node:fs";
+            const { total } = JSON.parse(readFileSync("coverage/coverage-summary.json", "utf8"));
+            const rows = ["lines", "statements", "functions", "branches"].map(
+              (metric) => `| ${metric} | ${total[metric].pct} % |`,
+            );
+            const summary = ["### Coverage", "", "| Metric | Covered |", "| --- | --- |", ...rows, ""];
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary.join("\n"));
+          '
+
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up
+        uses: ./.github/actions/setup
+
+      - name: Compile
+        run: pnpm build
+
+      # Development values only; the stack is discarded at the end of the job.
+      - name: Prepare environment
+        run: cp .env.example .env
+
+      - name: Build image
+        run: docker compose build api
+
+      - name: Start stack
+        run: docker compose up --detach --wait --wait-timeout 120
+
+      - name: Smoke test
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors http://127.0.0.1:3000/health/live
+          curl --fail --silent --show-error --retry 5 --retry-all-errors http://127.0.0.1:3000/health/ready
+
+      - name: Show logs
+        if: ${{ failure() }}
+        run: docker compose logs
+
+      - name: Stop stack
+        if: ${{ always() }}
+        run: docker compose down --volumes
