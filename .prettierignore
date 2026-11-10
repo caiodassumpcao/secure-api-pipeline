@@ -1,0 +1,8 @@
+# Generated
+pnpm-lock.yaml
+CHANGELOG.md
+coverage/
+dist/
+
+# Local editor settings
+.vscode/

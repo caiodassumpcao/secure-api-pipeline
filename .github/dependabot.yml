@@ -1,0 +1,79 @@
+# Commit prefixes feed release-please through the squash-merged PR title:
+# production dependencies and the base image release a patch (`fix`); tooling
+# and CI updates do not (`chore`, `ci`).
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Matches minimumReleaseAge in pnpm-workspace.yaml. Security updates skip it.
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+      include: scope
+    groups:
+      production:
+        dependency-type: production
+        update-types: [minor, patch]
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # Track the Node.js 24 LTS line used at runtime.
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
+      # typescript-eslint supports TypeScript < 6.1; see DESIGN §4.1.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: fix
+      include: scope
+    ignore:
+      # Stay on the Node.js 24 LTS line.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: chore
+      include: scope
+    ignore:
+      # PostgreSQL major upgrades need a data migration.
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]

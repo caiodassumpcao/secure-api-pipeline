@@ -6,11 +6,16 @@
 
 <p align="center">
   <a href="https://github.com/caiodassumpcao/secure-api-pipeline/actions/workflows/ci.yml"><img src="https://github.com/caiodassumpcao/secure-api-pipeline/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <!-- v0.4: security workflow and OpenSSF Scorecard badges
   <a href="https://github.com/caiodassumpcao/secure-api-pipeline/actions/workflows/security.yml"><img src="https://github.com/caiodassumpcao/secure-api-pipeline/actions/workflows/security.yml/badge.svg" alt="Security"/></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/caiodassumpcao/secure-api-pipeline"><img src="https://api.scorecard.dev/projects/github.com/caiodassumpcao/secure-api-pipeline/badge" alt="OpenSSF Scorecard"/></a>
+  -->
   <img src="https://img.shields.io/badge/node-24%20LTS-339933?logo=nodedotjs&logoColor=white" alt="Node 24"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"/></a>
 </p>
+
+> [!NOTE]
+> **Built in public, phase by phase.** The foundation is in place: tooling, configuration, health checks, container and CI. Highlights and Architecture describe the v1.0 target; sections marked with a version describe what that release delivers — see the [roadmap](#roadmap).
 
 ---
 
@@ -22,16 +27,16 @@ The API is a small multi-tenant project & task tracker. Small on purpose: the fo
 
 ## Highlights
 
-| | |
-|---|---|
-| 🔐 **Secure by default** | argon2id passwords, short-lived EdDSA JWTs, rotating refresh tokens with reuse detection, lockout and rate limiting |
-| 🏢 **Tenant isolation** | Role-based permissions per workspace, enforced at the data layer and tested for every role × action |
-| 🧪 **Tested** | Unit, integration (real PostgreSQL via Testcontainers), security and DAST suites; ≥ 85 % coverage gate |
-| 🛡️ **DevSecOps pipeline** | Semgrep, CodeQL, Gitleaks, OSV-Scanner, Trivy, OWASP ZAP — all reported to GitHub code scanning |
-| 📦 **Supply chain** | Distroless non-root image, SBOM (SPDX + CycloneDX), cosign keyless signatures, SLSA build provenance |
-| 🚀 **Verified deploys** | Signature checked on the server, migrations, smoke tests, automatic rollback |
-| 📈 **Observable** | OpenTelemetry traces and metrics, logs correlated by `trace_id` |
-| 🧭 **Documented decisions** | Threat model (STRIDE), ADRs, runbook |
+|                             |                                                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 🔐 **Secure by default**    | argon2id passwords, short-lived EdDSA JWTs, rotating refresh tokens with reuse detection, lockout and rate limiting |
+| 🏢 **Tenant isolation**     | Role-based permissions per workspace, enforced at the data layer and tested for every role × action                 |
+| 🧪 **Tested**               | Unit, integration (real PostgreSQL via Testcontainers), security and DAST suites; ≥ 85 % coverage gate              |
+| 🛡️ **DevSecOps pipeline**   | Semgrep, CodeQL, Gitleaks, OSV-Scanner, Trivy, OWASP ZAP — all reported to GitHub code scanning                     |
+| 📦 **Supply chain**         | Distroless non-root image, SBOM (SPDX + CycloneDX), cosign keyless signatures, SLSA build provenance                |
+| 🚀 **Verified deploys**     | Signature checked on the server, migrations, smoke tests, automatic rollback                                        |
+| 📈 **Observable**           | OpenTelemetry traces and metrics, logs correlated by `trace_id`                                                     |
+| 🧭 **Documented decisions** | Threat model (STRIDE), ADRs, runbook                                                                                |
 
 ## Pipeline
 
@@ -55,7 +60,7 @@ flowchart LR
     DEP -->|fail| RB[Automatic rollback]
 ```
 
-Details of every gate and what it catches: [`docs/security-pipeline.md`](docs/security-pipeline.md).
+Details of every gate and what it catches: `docs/security-pipeline.md` _(v0.4)_.
 
 ## Architecture
 
@@ -68,14 +73,14 @@ flowchart LR
     O -.-> GF[Grafana]
 ```
 
-| Layer | Stack |
-|---|---|
-| Runtime | Node.js 24 LTS · TypeScript (strict) |
-| HTTP | Fastify 5 · zod (validation + OpenAPI) |
-| Data | PostgreSQL 17 · Drizzle ORM · SQL migrations |
-| Auth | argon2id · `jose` (Ed25519 JWT) · rotating refresh tokens |
-| Observability | OpenTelemetry · pino · Prometheus metrics |
-| Delivery | Docker (distroless) · GitHub Actions · GHCR · cosign · Nginx |
+| Layer         | Stack                                                        |
+| ------------- | ------------------------------------------------------------ |
+| Runtime       | Node.js 24 LTS · TypeScript (strict)                         |
+| HTTP          | Fastify 5 · zod (validation + OpenAPI)                       |
+| Data          | PostgreSQL 17 · Drizzle ORM · SQL migrations                 |
+| Auth          | argon2id · `jose` (Ed25519 JWT) · rotating refresh tokens    |
+| Observability | OpenTelemetry · pino · Prometheus metrics                    |
+| Delivery      | Docker (distroless) · GitHub Actions · GHCR · cosign · Nginx |
 
 ## Quick start
 
@@ -84,14 +89,14 @@ Requirements: Docker + Compose v2. For development without Docker: Node 24 and p
 ```bash
 git clone https://github.com/caiodassumpcao/secure-api-pipeline.git
 cd secure-api-pipeline
-cp .env.example .env
-pnpm keys:generate                 # dev Ed25519 key pair
-docker compose up -d               # api + postgres (migrations run automatically)
-curl localhost:3000/health/ready
-open http://localhost:3000/docs    # OpenAPI UI
+cp .env.example .env                 # local development values
+docker compose up -d --build --wait  # api + postgres, ports bound to 127.0.0.1
+curl localhost:3000/health/ready     # {"status":"ok","checks":{"database":"ok"}}
 ```
 
-With local observability (Grafana, Prometheus, Tempo, Loki):
+From v0.1 the stack also runs database migrations and serves the OpenAPI UI at `http://localhost:3000/docs`; from v0.2, `pnpm keys:generate` creates the development Ed25519 key pair.
+
+With local observability (Grafana, Prometheus, Tempo, Loki) — _v0.3_:
 
 ```bash
 docker compose --profile observability up -d
@@ -99,6 +104,8 @@ open http://localhost:3001         # Grafana
 ```
 
 ### Try it
+
+_Available from v0.2._
 
 ```bash
 # Register and log in
@@ -113,31 +120,35 @@ curl -s localhost:3000/v1/me -H "authorization: Bearer $TOKEN"
 
 ## API overview
 
-| Resource | Endpoints |
-|---|---|
-| Auth | `POST /v1/auth/register` · `login` · `refresh` · `logout` |
-| Me | `GET /v1/me` |
-| Workspaces | `/v1/workspaces[/:wsId]` |
-| Members | `/v1/workspaces/:wsId/members[/:userId]` |
-| Projects | `/v1/workspaces/:wsId/projects[/:projectId]` |
-| Tasks | `/v1/workspaces/:wsId/projects/:projectId/tasks` · `/v1/workspaces/:wsId/tasks/:taskId` |
-| Audit | `GET /v1/workspaces/:wsId/audit-events` |
-| Health | `/health/live` · `/health/ready` |
+Health endpoints are available today; the resource endpoints arrive in v0.1 and v0.2.
 
-Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details and always include a `traceId`.
+| Resource   | Endpoints                                                                               |
+| ---------- | --------------------------------------------------------------------------------------- |
+| Auth       | `POST /v1/auth/register` · `login` · `refresh` · `logout`                               |
+| Me         | `GET /v1/me`                                                                            |
+| Workspaces | `/v1/workspaces[/:wsId]`                                                                |
+| Members    | `/v1/workspaces/:wsId/members[/:userId]`                                                |
+| Projects   | `/v1/workspaces/:wsId/projects[/:projectId]`                                            |
+| Tasks      | `/v1/workspaces/:wsId/projects/:projectId/tasks` · `/v1/workspaces/:wsId/tasks/:taskId` |
+| Audit      | `GET /v1/workspaces/:wsId/audit-events`                                                 |
+| Health     | `/health/live` · `/health/ready`                                                        |
+
+Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details and always include a `traceId` — see the [problem types](docs/problems.md).
 
 ### Roles
 
-| Action | owner | admin | member | viewer |
-|---|:-:|:-:|:-:|:-:|
-| Read projects & tasks | ✅ | ✅ | ✅ | ✅ |
-| Create / update tasks | ✅ | ✅ | ✅ | — |
-| Manage projects | ✅ | ✅ | — | — |
-| Manage members | ✅ | ✅ | — | — |
-| Read audit log | ✅ | ✅ | — | — |
-| Delete workspace | ✅ | — | — | — |
+| Action                | owner | admin | member | viewer |
+| --------------------- | :---: | :---: | :----: | :----: |
+| Read projects & tasks |  ✅   |  ✅   |   ✅   |   ✅   |
+| Create / update tasks |  ✅   |  ✅   |   ✅   |   —    |
+| Manage projects       |  ✅   |  ✅   |   —    |   —    |
+| Manage members        |  ✅   |  ✅   |   —    |   —    |
+| Read audit log        |  ✅   |  ✅   |   —    |   —    |
+| Delete workspace      |  ✅   |   —   |   —    |   —    |
 
 ## Verify a release image
+
+_Available from v0.4._
 
 ```bash
 IMAGE=ghcr.io/caiodassumpcao/secure-api-pipeline:1.0.0
@@ -151,22 +162,23 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 
 ## Security
 
-- Threat model: [`docs/threat-model.md`](docs/threat-model.md)
-- Security pipeline: [`docs/security-pipeline.md`](docs/security-pipeline.md)
 - Reporting a vulnerability: [`SECURITY.md`](SECURITY.md)
+- Security design and controls: [`docs/DESIGN.md` §5](docs/DESIGN.md#5-security-design)
+- Threat model: `docs/threat-model.md` _(v0.2)_
+- Security pipeline: `docs/security-pipeline.md` _(v0.4)_
 
 ## Part of a platform
 
-| Repository | Role |
-|---|---|
-| [server-hardening-kit](https://github.com/caiodassumpcao/server-hardening-kit) | Hardens the server this API runs on |
-| **secure-api-pipeline** | Builds, secures and ships the API |
-| [drkit](https://github.com/caiodassumpcao/drkit) | Backs up and recovers it |
-| observability-stack *(coming soon)* | Monitors it: metrics, logs, traces, SLO alerts |
+| Repository                                                                     | Role                                           |
+| ------------------------------------------------------------------------------ | ---------------------------------------------- |
+| [server-hardening-kit](https://github.com/caiodassumpcao/server-hardening-kit) | Hardens the server this API runs on            |
+| **secure-api-pipeline**                                                        | Builds, secures and ships the API              |
+| [drkit](https://github.com/caiodassumpcao/drkit)                               | Backs up and recovers it                       |
+| observability-stack _(coming soon)_                                            | Monitors it: metrics, logs, traces, SLO alerts |
 
 ## Roadmap
 
-- [ ] Foundation — tooling, config, health, CI
+- [x] Foundation — tooling, config, health, CI
 - [ ] **v0.1** — Domain, data model, CRUD, OpenAPI
 - [ ] **v0.2** — Authentication, authorization, tenant isolation, audit log, threat model
 - [ ] **v0.3** — OpenTelemetry traces, metrics and correlated logs
@@ -177,16 +189,20 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 
 - [Design specification](docs/DESIGN.md)
 - [Architecture decision records](docs/adr/)
-- [Runbook](docs/runbook.md)
+- [Problem types](docs/problems.md)
+- [Contributing](CONTRIBUTING.md)
+- Runbook — `docs/runbook.md` _(v1.0)_
 
 ## Development
 
 ```bash
-corepack enable && pnpm install
-pnpm dev               # watch mode
-pnpm test              # unit
-pnpm test:integration  # needs Docker
+corepack enable && pnpm install   # also installs the git hooks
+cp .env.example .env
+docker compose up -d postgres     # database for local development
+pnpm dev                          # watch mode, http://localhost:3000
+pnpm test                         # unit tests (pnpm test:coverage for the 85 % gate)
 pnpm lint && pnpm typecheck
+pnpm build                        # compile to dist/
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
