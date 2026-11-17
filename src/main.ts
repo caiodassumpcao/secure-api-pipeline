@@ -24,7 +24,13 @@ if (config.env === 'test') {
   );
 }
 
-const app = await buildApp({ logger, database, authenticate, docs: config.docs });
+const app = await buildApp({
+  logger,
+  database,
+  authenticate,
+  docs: config.docs,
+  http: { corsOrigins: config.cors.origins, trustProxy: config.trustProxy },
+});
 
 app.addHook('onClose', async () => {
   await database.close();

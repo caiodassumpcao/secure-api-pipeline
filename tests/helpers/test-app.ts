@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { buildApp } from '../../src/app.ts';
+import { buildApp, type AppDependencies } from '../../src/app.ts';
 import type { Db } from '../../src/db/database.ts';
 import { createLogger } from '../../src/lib/logger.ts';
 import { denyAllAuthenticator, type Authenticator } from '../../src/plugins/authentication.ts';
@@ -10,6 +10,7 @@ export interface TestAppOptions {
   migrationsApplied?: () => Promise<boolean>;
   authenticate?: Authenticator;
   docs?: boolean;
+  http?: Partial<AppDependencies['http']>;
 }
 
 /**
@@ -26,6 +27,7 @@ export async function buildTestApp(options: TestAppOptions = {}) {
     database: { ping, migrationsApplied, db: {} as Db },
     authenticate: options.authenticate ?? denyAllAuthenticator,
     docs: { enabled: options.docs ?? false },
+    http: { corsOrigins: [], trustProxy: false, ...options.http },
   });
   return { app, logs, ping, migrationsApplied };
 }

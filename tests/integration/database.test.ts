@@ -24,6 +24,7 @@ async function ready(testDatabase: TestDatabase) {
     database: testDatabase.database,
     authenticate: denyAllAuthenticator,
     docs: { enabled: false },
+    http: { corsOrigins: [], trustProxy: false },
   });
   try {
     return await app.inject({ method: 'GET', url: '/health/ready' });

@@ -4,6 +4,7 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
+import type { TrustProxy } from './config/config.ts';
 import type { Db } from './db/database.ts';
 import { healthRoutes, type ReadinessProbe } from './modules/health/health.routes.ts';
 import { memberRoutes } from './modules/members/members.routes.ts';
@@ -18,6 +19,7 @@ import { registerAuthentication, type Authenticator } from './plugins/authentica
 import { frameworkErrorHandler, registerErrorHandler } from './plugins/error-handler.ts';
 import { registerOpenApi } from './plugins/openapi.ts';
 import { generateRequestId, registerRequestIdHeader } from './plugins/request-id.ts';
+import { registerSecurity, trustProxyOption } from './plugins/security.ts';
 
 /** Request body cap (DoS control, DESIGN §5.1). */
 export const BODY_LIMIT_BYTES = 100 * 1024;
@@ -32,13 +34,19 @@ export interface AppDependencies {
   readonly authenticate: Authenticator;
   /** Serve `/docs` and `/openapi.json` (off in production unless enabled). */
   readonly docs: { readonly enabled: boolean };
+  readonly http: {
+    /** Browser origins allowed by CORS. */
+    readonly corsOrigins: readonly string[];
+    /** Proxies trusted to report the client IP (`X-Forwarded-For`); off by default. */
+    readonly trustProxy: TrustProxy;
+  };
 }
 
 /**
  * Creates the Fastify instance with all plugins and routes, without listening.
  * Tests use it with `app.inject()`; `main.ts` adds the process lifecycle.
  */
-export async function buildApp({ logger, database, authenticate, docs }: AppDependencies) {
+export async function buildApp({ logger, database, authenticate, docs, http }: AppDependencies) {
   const app = Fastify({
     loggerInstance: logger,
     genReqId: generateRequestId,
@@ -46,6 +54,7 @@ export async function buildApp({ logger, database, authenticate, docs }: AppDepe
     bodyLimit: BODY_LIMIT_BYTES,
     requestTimeout: REQUEST_TIMEOUT_MS,
     frameworkErrors: frameworkErrorHandler,
+    trustProxy: trustProxyOption(http.trustProxy),
   }).withTypeProvider<ZodTypeProvider>();
 
   // JSON only (DESIGN §3): other media types get a 415 problem.
@@ -56,6 +65,7 @@ export async function buildApp({ logger, database, authenticate, docs }: AppDepe
 
   registerRequestIdHeader(app);
   registerErrorHandler(app);
+  await registerSecurity(app, { corsOrigins: http.corsOrigins });
 
   // Before any route, so every route is documented.
   if (docs.enabled) await registerOpenApi(app);

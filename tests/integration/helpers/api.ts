@@ -49,6 +49,7 @@ export class TestApi {
       database: testDatabase.database,
       authenticate: createTestAuthenticator('test'),
       docs: { enabled: false },
+      http: { corsOrigins: [], trustProxy: false },
     });
     await app.ready();
     return new TestApi(app, testDatabase);
