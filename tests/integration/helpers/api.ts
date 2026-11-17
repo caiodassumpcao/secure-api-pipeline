@@ -125,6 +125,20 @@ export class TestApi {
     expectStatus(response, 201);
     return response.json<{ id: string }>().id;
   }
+
+  async createTask(
+    actor: TestUser,
+    workspaceId: string,
+    projectId: string,
+    fields: Record<string, unknown> = {},
+  ): Promise<string> {
+    const response = await this.as(actor).post(
+      `/v1/workspaces/${workspaceId}/projects/${projectId}/tasks`,
+      { title: 'Task', ...fields },
+    );
+    expectStatus(response, 201);
+    return response.json<{ id: string }>().id;
+  }
 }
 
 /** Fails with the response body, which explains unexpected statuses. */

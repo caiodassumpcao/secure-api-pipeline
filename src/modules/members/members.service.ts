@@ -3,6 +3,7 @@ import type { Role } from '../../db/schema.ts';
 import { toPage, type Page, type PageRequest } from '../../lib/pagination.ts';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
 import { assertCan, authorize } from '../auth/access.ts';
+import { createTasksRepository } from '../tasks/tasks.repository.ts';
 import { createWorkspacesRepository } from '../workspaces/workspaces.repository.ts';
 import { createMembersRepository, type MemberRow } from './members.repository.ts';
 
@@ -97,16 +98,18 @@ export function createMembersService(db: Db) {
       });
     },
 
-    /** Removes a membership; the workspace keeps at least one owner. */
+    /** Removing a member also unassigns their tasks, in the same transaction. */
     async remove(actorId: string, workspaceId: string, userId: string): Promise<void> {
       await db.transaction(async (tx) => {
         const members = createMembersRepository(tx);
         await createWorkspacesRepository(tx).lock(workspaceId);
         const actorRole = await authorize(tx, workspaceId, actorId, 'member:manage');
+        await members.lock(workspaceId, userId);
         const member = await findOrThrow(tx, workspaceId, userId);
         assertCanManage(actorRole, member.role);
         await assertNotLastOwner(tx, workspaceId, member);
 
+        await createTasksRepository(tx).unassignMember(workspaceId, userId);
         await members.delete(workspaceId, userId);
       });
     },

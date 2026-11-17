@@ -53,3 +53,20 @@ export async function createTestDatabase(
     },
   };
 }
+
+/**
+ * Resolves once a session of the pool's database is blocked on a lock held by
+ * another transaction: lets a test interleave two transactions deterministically.
+ */
+export async function waitForLockWait(pool: pg.Pool, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { rows } = await pool.query<{ waiting: number }>(
+      `SELECT count(*)::int AS waiting FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+    );
+    if ((rows[0]?.waiting ?? 0) > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`No session waited for a lock within ${timeoutMs} ms`);
+}

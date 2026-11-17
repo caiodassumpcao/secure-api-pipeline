@@ -109,7 +109,8 @@ export const memberRoutes: FastifyPluginCallbackZod<MemberRoutesOptions> = (
     {
       schema: {
         tags,
-        summary: 'Remove a member (owner, admin; only owners remove owners)',
+        summary:
+          'Remove a member and unassign their tasks (owner, admin; only owners remove owners)',
         params: memberParams,
         response: { 204: noContentSchema, ...problemResponses(400, 401, 403, 404, 409) },
       },

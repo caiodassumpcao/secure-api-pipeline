@@ -63,6 +63,20 @@ export function createMembersRepository(db: Executor) {
         .where(and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, userId)));
     },
 
+    /**
+     * Locks the membership row until the transaction ends. A concurrent task
+     * assignment to this member holds a key-share lock on it through the
+     * assignee foreign key: the removal waits for it to commit, then sees and
+     * unassigns that task, and later assignments fail the foreign key check.
+     */
+    async lock(workspaceId: string, userId: string): Promise<void> {
+      await db
+        .select({ userId: memberships.userId })
+        .from(memberships)
+        .where(and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, userId)))
+        .for('update');
+    },
+
     async delete(workspaceId: string, userId: string): Promise<void> {
       await db
         .delete(memberships)

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { expectStatus, TestApi, type Team } from './helpers/api.ts';
+import { waitForLockWait } from './helpers/database.ts';
 
 let api: TestApi;
 
@@ -139,6 +140,49 @@ describe('workspace members', () => {
       const roles = list.json<{ data: { role: string }[] }>().data.map((member) => member.role);
       expect(roles.filter((role) => role === 'owner')).toHaveLength(1);
     });
+  });
+
+  it('removing a member unassigns their tasks', async () => {
+    const team = await api.createTeam();
+    const projectId = await api.createProject(team.owner, team.workspaceId);
+    const taskId = await api.createTask(team.owner, team.workspaceId, projectId, {
+      assigneeId: team.member.id,
+    });
+
+    expectStatus(await api.as(team.admin).delete(`${members(team)}/${team.member.id}`), 204);
+
+    const task = await api.as(team.owner).get(`/v1/workspaces/${team.workspaceId}/tasks/${taskId}`);
+    expect(task.json()).toMatchObject({ id: taskId, assigneeId: null });
+    expect((await api.as(team.member).get(members(team))).statusCode).toBe(404);
+  });
+
+  it('removing a member waits for a concurrent assignment to them, then unassigns it', async () => {
+    const team = await api.createTeam();
+    const projectId = await api.createProject(team.owner, team.workspaceId);
+    const taskId = await api.createTask(team.owner, team.workspaceId, projectId);
+    const { pool } = api.testDatabase.database;
+
+    // An assignment in flight: its foreign key check holds a lock on the membership.
+    const assignment = await pool.connect();
+    try {
+      await assignment.query('BEGIN');
+      await assignment.query('UPDATE tasks SET assignee_id = $1 WHERE id = $2', [
+        team.member.id,
+        taskId,
+      ]);
+      const removal = api.as(team.admin).delete(`${members(team)}/${team.member.id}`);
+      await waitForLockWait(pool);
+      await assignment.query('COMMIT');
+
+      expectStatus(await removal, 204);
+    } finally {
+      // No-op after COMMIT; unblocks the removal if the test failed before it.
+      await assignment.query('ROLLBACK');
+      assignment.release();
+    }
+
+    const task = await api.as(team.owner).get(`/v1/workspaces/${team.workspaceId}/tasks/${taskId}`);
+    expect(task.json()).toMatchObject({ id: taskId, assigneeId: null });
   });
 
   it('reads a member', async () => {

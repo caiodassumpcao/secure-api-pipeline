@@ -145,6 +145,24 @@ describe('GET/PATCH/DELETE /v1/workspaces/:wsId', () => {
     expect(response.statusCode).toBe(409);
   });
 
+  it('deletes projects, tasks and memberships with the workspace', async () => {
+    const team = await api.createTeam();
+    const projectId = await api.createProject(team.owner, team.workspaceId);
+    const taskId = await api.createTask(team.member, team.workspaceId, projectId, {
+      assigneeId: team.member.id,
+    });
+
+    expectStatus(await api.as(team.owner).delete(`/v1/workspaces/${team.workspaceId}`), 204);
+
+    const { rows } = await api.testDatabase.database.pool.query<{ total: string }>(
+      `SELECT (SELECT count(*) FROM tasks WHERE id = $1)
+            + (SELECT count(*) FROM projects WHERE id = $2)
+            + (SELECT count(*) FROM memberships WHERE workspace_id = $3) AS total`,
+      [taskId, projectId, team.workspaceId],
+    );
+    expect(rows[0]?.total).toBe('0');
+  });
+
   it('answers 400 for a malformed id', async () => {
     const response = await api.as(alice).get('/v1/workspaces/not-a-uuid');
 
