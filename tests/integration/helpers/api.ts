@@ -4,6 +4,7 @@ import type { Role } from '../../../src/db/schema.ts';
 import { users } from '../../../src/db/schema.ts';
 import { uuidv7 } from '../../../src/lib/ids.ts';
 import { createLogger } from '../../../src/lib/logger.ts';
+import { createPasswordHasher } from '../../../src/modules/auth/password.ts';
 import type { TokenService } from '../../../src/modules/auth/tokens.ts';
 import { createTestTokenService } from '../../helpers/keys.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
@@ -56,7 +57,7 @@ export class TestApi {
     const app = await buildApp({
       logger: createLogger({ level: 'silent' }),
       database: testDatabase.database,
-      auth: { tokens },
+      auth: { tokens, passwords: createPasswordHasher() },
       docs: { enabled: false },
       http: { corsOrigins: [], trustProxy: false },
     });

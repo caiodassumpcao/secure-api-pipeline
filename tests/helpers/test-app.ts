@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import { buildApp, type AppDependencies } from '../../src/app.ts';
 import type { Db } from '../../src/db/database.ts';
 import { createLogger } from '../../src/lib/logger.ts';
+import { createPasswordHasher } from '../../src/modules/auth/password.ts';
 import type { TokenService } from '../../src/modules/auth/tokens.ts';
 import { createTestTokenService } from './keys.ts';
 import { LogCapture } from './log-capture.ts';
@@ -26,7 +27,10 @@ export async function buildTestApp(options: TestAppOptions = {}) {
   const app = await buildApp({
     logger,
     database: { ping, migrationsApplied, db: {} as Db },
-    auth: { tokens: options.tokens ?? (await createTestTokenService()) },
+    auth: {
+      tokens: options.tokens ?? (await createTestTokenService()),
+      passwords: createPasswordHasher(),
+    },
     docs: { enabled: options.docs ?? false },
     http: { corsOrigins: [], trustProxy: false, ...options.http },
   });

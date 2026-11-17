@@ -15,6 +15,9 @@ import { taskRoutes } from './modules/tasks/tasks.routes.ts';
 import { createTasksService } from './modules/tasks/tasks.service.ts';
 import { workspaceRoutes } from './modules/workspaces/workspaces.routes.ts';
 import { createWorkspacesService } from './modules/workspaces/workspaces.service.ts';
+import { authRoutes } from './modules/auth/auth.routes.ts';
+import { createAuthService } from './modules/auth/auth.service.ts';
+import type { PasswordHasher } from './modules/auth/password.ts';
 import type { TokenService } from './modules/auth/tokens.ts';
 import { createBearerAuthenticator, registerAuthentication } from './plugins/authentication.ts';
 import { frameworkErrorHandler, registerErrorHandler } from './plugins/error-handler.ts';
@@ -34,6 +37,7 @@ export interface AppDependencies {
   readonly auth: {
     /** Issues and verifies the access tokens that authenticate `/v1` routes. */
     readonly tokens: TokenService;
+    readonly passwords: PasswordHasher;
   };
   /** Serve `/docs` and `/openapi.json` (off in production unless enabled). */
   readonly docs: { readonly enabled: boolean };
@@ -74,6 +78,11 @@ export async function buildApp({ logger, database, auth, docs, http }: AppDepend
   if (docs.enabled) await registerOpenApi(app);
 
   await app.register(healthRoutes, { database });
+
+  await app.register(authRoutes, {
+    prefix: '/v1/auth',
+    service: createAuthService({ db: database.db, ...auth }),
+  });
 
   await app.register(
     async (v1) => {

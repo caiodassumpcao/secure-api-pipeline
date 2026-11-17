@@ -50,7 +50,7 @@ Responses never contain stack traces, SQL or internal hostnames. Server errors a
 
 ## `conflict`
 
-**409** — The request conflicts with the current state of the resource: the slug is already in use, the user is already a member, the change would leave a workspace without an owner, or the task belongs to an archived project. Retrying the same request will not succeed until that state changes.
+**409** — The request conflicts with the current state of the resource: an account already uses the email address, the slug is already in use, the user is already a member, the change would leave a workspace without an owner, or the task belongs to an archived project. Retrying the same request will not succeed until that state changes.
 
 ## `payload-too-large`
 

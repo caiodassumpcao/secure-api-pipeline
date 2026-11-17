@@ -4,6 +4,7 @@ import { createDatabase } from './db/database.ts';
 import { latestMigration } from './db/migrations.ts';
 import { createLogger } from './lib/logger.ts';
 import { registerGracefulShutdown } from './lib/shutdown.ts';
+import { createPasswordHasher } from './modules/auth/password.ts';
 import { createTokenService } from './modules/auth/tokens.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -22,7 +23,7 @@ const tokens = createTokenService({
 const app = await buildApp({
   logger,
   database,
-  auth: { tokens },
+  auth: { tokens, passwords: createPasswordHasher() },
   docs: config.docs,
   http: { corsOrigins: config.cors.origins, trustProxy: config.trustProxy },
 });

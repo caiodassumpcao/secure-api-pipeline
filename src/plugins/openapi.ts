@@ -36,6 +36,7 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
       // Every route needs a token unless its schema says otherwise (`security: []`).
       security: [{ bearerAuth: [] }],
       tags: [
+        { name: 'auth', description: 'Accounts and sessions' },
         { name: 'workspaces', description: 'Tenants' },
         { name: 'members', description: 'Workspace memberships and roles' },
         { name: 'projects' },

@@ -29,6 +29,7 @@ describe('OpenAPI document', () => {
     expect(Object.keys(document.paths).sort()).toEqual([
       '/health/live',
       '/health/ready',
+      '/v1/auth/register',
       '/v1/workspaces',
       '/v1/workspaces/{wsId}',
       '/v1/workspaces/{wsId}/members',
