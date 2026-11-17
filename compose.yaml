@@ -1,5 +1,6 @@
 # Local stack: `cp .env.example .env && docker compose up`.
-# Ports are published on 127.0.0.1 only.
+# Grafana, Tempo, Loki and Prometheus too: `docker compose --profile observability up`
+# (docs/observability.md). Ports are published on 127.0.0.1 only.
 name: secure-api-pipeline
 
 services:
@@ -57,6 +58,12 @@ services:
       JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
       JWT_PUBLIC_KEY_FILE: /run/secrets/jwt_public_key
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # Telemetry. The collector of the observability profile is
+      # http://otel-lgtm:4318 (API_OTLP_ENDPOINT in .env); unset, nothing is
+      # pushed. /metrics listens on 9464 inside the network, never published.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${API_OTLP_ENDPOINT:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-}
     secrets:
       - jwt_private_key
       - jwt_public_key
@@ -77,6 +84,23 @@ services:
     pids_limit: 100
     mem_limit: 512m
     cpus: 1.0
+    restart: unless-stopped
+
+  # Grafana with Tempo, Loki and Prometheus behind one OTLP endpoint, for
+  # development only: Grafana lets anonymous visitors in as admins, and data
+  # lives in the container, gone when it is removed.
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.41.0@sha256:2e3290657f2f2a256c7a9175f097424a3ac5b54840741ace433e108e109348b6
+    profiles: [observability]
+    ports:
+      - 127.0.0.1:${GRAFANA_PORT:-3001}:3000
+      # OTLP over HTTP, for `pnpm dev` on the host.
+      - 127.0.0.1:${OTLP_HTTP_PORT:-4318}:4318
+    volumes:
+      - ./observability/grafana/provisioning/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/secure-api.yaml:ro
+      - ./observability/grafana/dashboards:/otel-lgtm/dashboards/secure-api:ro
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
 volumes:
