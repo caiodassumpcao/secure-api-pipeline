@@ -1,11 +1,13 @@
 import type { FastifyRequest } from 'fastify';
 import { describe, expect, it } from 'vitest';
+import { PROBLEM_TYPE_BASE_URI } from '../../../src/lib/problem.ts';
 import {
   createTestAuthenticator,
   currentUser,
   denyAllAuthenticator,
   TEST_USER_HEADER,
 } from '../../../src/plugins/authentication.ts';
+import { buildTestApp } from '../../helpers/test-app.ts';
 
 const USER_ID = '0190F3B2-7C1E-7D2A-9F00-1234567890AB';
 const requestWith = (headers: FastifyRequest['headers']) => ({ headers }) as FastifyRequest;
@@ -37,6 +39,31 @@ describe('createTestAuthenticator', () => {
 describe('denyAllAuthenticator', () => {
   it('authenticates nobody, whatever the headers', () => {
     expect(denyAllAuthenticator(requestWith({ [TEST_USER_HEADER]: USER_ID }))).toBeNull();
+  });
+});
+
+describe('protected routes', () => {
+  it('answer 401 with a challenge outside the test environment', async () => {
+    const { app } = await buildTestApp({ authenticate: denyAllAuthenticator });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/workspaces',
+      headers: { [TEST_USER_HEADER]: USER_ID },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers['www-authenticate']).toBe('Bearer realm="secure-api"');
+    expect(response.json()).toMatchObject({
+      type: `${PROBLEM_TYPE_BASE_URI}unauthorized`,
+      detail: 'Authentication is required.',
+    });
+  });
+
+  it('do not cover the health endpoints', async () => {
+    const { app } = await buildTestApp({ authenticate: denyAllAuthenticator });
+
+    expect((await app.inject({ method: 'GET', url: '/health/live' })).statusCode).toBe(200);
   });
 });
 

@@ -4,7 +4,10 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
+import type { Db } from './db/database.ts';
 import { healthRoutes, type ReadinessProbe } from './modules/health/health.routes.ts';
+import { workspaceRoutes } from './modules/workspaces/workspaces.routes.ts';
+import { createWorkspacesService } from './modules/workspaces/workspaces.service.ts';
 import { registerAuthentication, type Authenticator } from './plugins/authentication.ts';
 import { frameworkErrorHandler, registerErrorHandler } from './plugins/error-handler.ts';
 import { generateRequestId, registerRequestIdHeader } from './plugins/request-id.ts';
@@ -17,7 +20,7 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 
 export interface AppDependencies {
   readonly logger: FastifyBaseLogger;
-  readonly database: ReadinessProbe;
+  readonly database: ReadinessProbe & { readonly db: Db };
   /** Resolves the caller of `/v1` routes (test stub until Phase 2). */
   readonly authenticate: Authenticator;
 }
@@ -48,9 +51,9 @@ export async function buildApp({ logger, database, authenticate }: AppDependenci
   await app.register(healthRoutes, { database });
 
   await app.register(
-    (v1, _options, done) => {
+    async (v1) => {
       registerAuthentication(v1, authenticate);
-      done();
+      await v1.register(workspaceRoutes, { service: createWorkspacesService(database.db) });
     },
     { prefix: '/v1' },
   );
