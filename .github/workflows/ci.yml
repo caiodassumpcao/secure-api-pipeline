@@ -81,8 +81,34 @@ jobs:
       - name: Set up
         uses: ./.github/actions/setup
 
-      # Fails below the coverage thresholds in vitest.config.ts (85 %).
-      - name: Unit tests with coverage
+      # Fast feedback without Docker; the coverage gate runs in `integration`.
+      - name: Unit tests
+        run: pnpm test
+
+  integration:
+    name: integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up
+        uses: ./.github/actions/setup
+
+      # Unit, integration and security suites against PostgreSQL started by
+      # Testcontainers (same image as compose.yaml). Fails below the coverage
+      # thresholds in vitest.config.ts (85 %).
+      - name: All test suites with coverage
         run: pnpm test:coverage
 
       - name: Publish coverage summary
