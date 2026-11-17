@@ -5,6 +5,7 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import { healthRoutes, type ReadinessProbe } from './modules/health/health.routes.ts';
+import { registerAuthentication, type Authenticator } from './plugins/authentication.ts';
 import { frameworkErrorHandler, registerErrorHandler } from './plugins/error-handler.ts';
 import { generateRequestId, registerRequestIdHeader } from './plugins/request-id.ts';
 
@@ -17,13 +18,15 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 export interface AppDependencies {
   readonly logger: FastifyBaseLogger;
   readonly database: ReadinessProbe;
+  /** Resolves the caller of `/v1` routes (test stub until Phase 2). */
+  readonly authenticate: Authenticator;
 }
 
 /**
  * Creates the Fastify instance with all plugins and routes, without listening.
  * Tests use it with `app.inject()`; `main.ts` adds the process lifecycle.
  */
-export async function buildApp({ logger, database }: AppDependencies) {
+export async function buildApp({ logger, database, authenticate }: AppDependencies) {
   const app = Fastify({
     loggerInstance: logger,
     genReqId: generateRequestId,
@@ -43,6 +46,14 @@ export async function buildApp({ logger, database }: AppDependencies) {
   registerErrorHandler(app);
 
   await app.register(healthRoutes, { database });
+
+  await app.register(
+    (v1, _options, done) => {
+      registerAuthentication(v1, authenticate);
+      done();
+    },
+    { prefix: '/v1' },
+  );
 
   return app;
 }

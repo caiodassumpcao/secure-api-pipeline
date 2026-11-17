@@ -4,13 +4,27 @@ import { createDatabase } from './db/database.ts';
 import { latestMigration } from './db/migrations.ts';
 import { createLogger } from './lib/logger.ts';
 import { registerGracefulShutdown } from './lib/shutdown.ts';
+import {
+  createTestAuthenticator,
+  denyAllAuthenticator,
+  type Authenticator,
+} from './plugins/authentication.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 const config = loadConfigOrExit();
 const logger = createLogger(config.log);
 const database = createDatabase(config.database, logger, { expectedMigration: latestMigration() });
-const app = await buildApp({ logger, database });
+
+let authenticate: Authenticator = denyAllAuthenticator;
+if (config.env === 'test') {
+  authenticate = createTestAuthenticator(config.env);
+  logger.warn(
+    'test authentication stub enabled: callers are identified by the x-test-user-id header',
+  );
+}
+
+const app = await buildApp({ logger, database, authenticate });
 
 app.addHook('onClose', async () => {
   await database.close();

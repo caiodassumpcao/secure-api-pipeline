@@ -17,7 +17,10 @@ export interface ProblemType {
 export const ProblemTypes = {
   badRequest: { slug: 'bad-request', title: 'Bad Request', status: 400 },
   validation: { slug: 'validation-error', title: 'Validation Failed', status: 400 },
+  unauthorized: { slug: 'unauthorized', title: 'Unauthorized', status: 401 },
+  forbidden: { slug: 'forbidden', title: 'Forbidden', status: 403 },
   notFound: { slug: 'not-found', title: 'Not Found', status: 404 },
+  conflict: { slug: 'conflict', title: 'Conflict', status: 409 },
   payloadTooLarge: { slug: 'payload-too-large', title: 'Payload Too Large', status: 413 },
   unsupportedMediaType: {
     slug: 'unsupported-media-type',

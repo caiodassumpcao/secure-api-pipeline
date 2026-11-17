@@ -34,11 +34,23 @@ Responses never contain stack traces, SQL or internal hostnames. Server errors a
 
 ## `validation-error`
 
-**400** — The request is well formed but does not match the endpoint's schema: a field is missing, has the wrong type or format, or an unknown field was sent (request schemas are strict). `errors` lists every offending field.
+**400** — The request is well formed but does not match the endpoint's schema: a field is missing, has the wrong type or format, or an unknown field was sent (request schemas are strict). Also used when a field references something that cannot be used there, such as a task assignee who is not a member of the workspace. `errors` lists every offending field.
+
+## `unauthorized`
+
+**401** — The request carries no valid credentials. The response includes a `WWW-Authenticate` challenge. Until authentication arrives (v0.2), every `/v1` route answers 401 outside the test environment.
+
+## `forbidden`
+
+**403** — You are a member of the workspace, but your role does not allow the action (see the [permission matrix](DESIGN.md#21-permission-matrix)). Callers outside the workspace get [`not-found`](#not-found) instead.
 
 ## `not-found`
 
 **404** — The route does not exist, or the resource does not exist **or is not visible to you**. Resources of other workspaces are reported as not found rather than forbidden, so their existence is not disclosed.
+
+## `conflict`
+
+**409** — The request conflicts with the current state of the resource: the slug is already in use, the user is already a member, the change would leave a workspace without an owner, or the task belongs to an archived project. Retrying the same request will not succeed until that state changes.
 
 ## `payload-too-large`
 

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../src/app.ts';
 import { latestMigration, runMigrations } from '../../src/db/migrations.ts';
 import { createLogger } from '../../src/lib/logger.ts';
+import { denyAllAuthenticator } from '../../src/plugins/authentication.ts';
 import { createTestDatabase, type TestDatabase } from './helpers/database.ts';
 
 let empty: TestDatabase;
@@ -19,6 +20,7 @@ async function ready(testDatabase: TestDatabase) {
   const app = await buildApp({
     logger: createLogger({ level: 'silent' }),
     database: testDatabase.database,
+    authenticate: denyAllAuthenticator,
   });
   try {
     return await app.inject({ method: 'GET', url: '/health/ready' });
