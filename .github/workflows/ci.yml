@@ -160,6 +160,13 @@ jobs:
       - name: Prepare environment
         run: cp .env.example .env
 
+      # Throwaway key pair for this job. The runner's user is not the image's
+      # (uid 1000), so the private key is made readable for the bind mount.
+      - name: Generate signing keys
+        run: |
+          pnpm keys:generate
+          chmod 644 keys/jwt-private.pem
+
       - name: Build image
         run: docker compose build api
 
@@ -170,6 +177,14 @@ jobs:
         run: |
           curl --fail --silent --show-error --retry 5 --retry-all-errors http://127.0.0.1:3000/health/live
           curl --fail --silent --show-error --retry 5 --retry-all-errors http://127.0.0.1:3000/health/ready
+          # Register, log in and call /v1/me: proves the keys reach the container.
+          credentials='"email":"smoke@example.test","password":"a passphrase for the stack"'
+          curl --fail --silent --show-error http://127.0.0.1:3000/v1/auth/register \
+            -H 'content-type: application/json' -d "{$credentials,\"name\":\"Smoke\"}" > /dev/null
+          token=$(curl --fail --silent --show-error http://127.0.0.1:3000/v1/auth/login \
+            -H 'content-type: application/json' -d "{$credentials}" \
+            | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).accessToken)')
+          curl --fail --silent --show-error http://127.0.0.1:3000/v1/me -H "authorization: Bearer $token"
 
       - name: Show logs
         if: ${{ failure() }}

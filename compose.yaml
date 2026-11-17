@@ -53,6 +53,13 @@ services:
       NODE_ENV: development
       LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Access-token signing keys, mounted as secrets (never baked into the image).
+      JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
+      JWT_PUBLIC_KEY_FILE: /run/secrets/jwt_public_key
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    secrets:
+      - jwt_private_key
+      - jwt_public_key
     ports:
       - 127.0.0.1:${API_PORT:-3000}:3000
     depends_on:
@@ -74,3 +81,11 @@ services:
 
 volumes:
   postgres-data:
+
+# Development key pair from `pnpm keys:generate` (git-ignored). Compose mounts
+# the files as they are: the container user (uid 1000) must be able to read them.
+secrets:
+  jwt_private_key:
+    file: ./keys/jwt-private.pem
+  jwt_public_key:
+    file: ./keys/jwt-public.pem
