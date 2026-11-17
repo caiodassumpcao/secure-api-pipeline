@@ -1,7 +1,16 @@
 import type { FastifyPluginCallbackZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
 import { idSchema, problemResponses, timestampSchema } from '../../lib/schemas.ts';
-import type { AuthService } from './auth.service.ts';
+import { INVALID_CREDENTIALS, type AuthService } from './auth.service.ts';
+import {
+  clearDeviceCookie,
+  DEVICE_COOKIE,
+  readTokenCookie,
+  setDeviceCookie,
+  setRefreshCookie,
+} from './cookies.ts';
+import { DEVICE_TTL_MS, REFRESH_TOKEN_TTL_MS } from './policy.ts';
 
 export const emailSchema = z.string().trim().toLowerCase().pipe(z.email().max(254));
 
@@ -20,7 +29,18 @@ export const userSchema = z
   })
   .meta({ id: 'User' });
 
+export const accessTokenSchema = z
+  .object({
+    accessToken: z.string().describe('Send as `Authorization: Bearer <accessToken>`.'),
+    tokenType: z.literal('Bearer'),
+    expiresIn: z.number().int().describe('Seconds until the access token expires.'),
+  })
+  .meta({ id: 'AccessToken' });
+
 const tags = ['auth'];
+
+/** RFC 9110 requires a challenge with every 401. */
+const CHALLENGE = 'Bearer realm="secure-api"';
 
 export interface AuthRoutesOptions {
   readonly service: AuthService;
@@ -50,6 +70,40 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (app, { s
     async (request, reply) => {
       const user = await service.register(request.body);
       return reply.code(201).header('location', '/v1/me').send(user);
+    },
+  );
+
+  app.post(
+    '/login',
+    {
+      schema: {
+        tags,
+        summary: 'Log in: returns an access token and sets the refresh-token cookie',
+        description:
+          'Also sets a device cookie: clients that already logged in are not locked out when someone else keeps failing to log in to the account.',
+        security: [],
+        body: z.object({ email: emailSchema, password: passwordSchema }).strict(),
+        response: { 200: accessTokenSchema, ...problemResponses(400, 401) },
+      },
+    },
+    async (request, reply) => {
+      const result = await service.login(request.body, {
+        deviceToken: readTokenCookie(request, DEVICE_COOKIE),
+      });
+      if (result.status === 'failed') {
+        if (result.deviceRevoked) clearDeviceCookie(reply);
+        reply.header('www-authenticate', CHALLENGE);
+        throw new HttpProblem(ProblemTypes.unauthorized, INVALID_CREDENTIALS);
+      }
+      if (result.deviceToken !== undefined) {
+        setDeviceCookie(reply, result.deviceToken, DEVICE_TTL_MS);
+      }
+      setRefreshCookie(reply, result.refreshToken, REFRESH_TOKEN_TTL_MS);
+      return {
+        accessToken: result.accessToken,
+        tokenType: 'Bearer' as const,
+        expiresIn: result.expiresIn,
+      };
     },
   );
 

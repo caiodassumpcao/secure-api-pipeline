@@ -5,6 +5,7 @@ import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
 import { createMembersRepository } from '../members/members.repository.ts';
 import { createWorkspacesRepository } from '../workspaces/workspaces.repository.ts';
 import { createAuthRepository, type UserRow } from './auth.repository.ts';
+import { DEVICE_TTL_MS, REFRESH_TOKEN_TTL_MS, SESSION_TTL_MS } from './policy.ts';
 import { passwordPolicyIssues, type PasswordHasher } from './password.ts';
 import type { TokenService } from './tokens.ts';
 
@@ -28,7 +29,31 @@ export function toUser(row: UserRow): User {
 /** Name of the workspace every account starts with. */
 const PERSONAL_WORKSPACE_NAME = 'Personal';
 
-export function createAuthService({ db, passwords }: AuthServiceDependencies) {
+/** Same answer for an unknown email, a wrong password and a locked account. */
+export const INVALID_CREDENTIALS = 'The email or password is incorrect.';
+
+export interface Session {
+  readonly accessToken: string;
+  readonly expiresIn: number;
+  /** Opaque refresh token, for the refresh cookie. */
+  readonly refreshToken: string;
+}
+
+export type LoginResult =
+  | (Session & {
+      readonly status: 'succeeded';
+      /** A new device cookie to set, when the client had no valid one. */
+      readonly deviceToken: string | undefined;
+    })
+  | {
+      readonly status: 'failed';
+      /** The device cookie was presented with too many wrong passwords and is revoked. */
+      readonly deviceRevoked: boolean;
+    };
+
+export function createAuthService({ db, passwords, tokens }: AuthServiceDependencies) {
+  const repository = createAuthRepository(db);
+
   return {
     /**
      * Creates an account and its personal workspace, owned by it, in one
@@ -73,6 +98,65 @@ export function createAuthService({ db, passwords }: AuthServiceDependencies) {
         }
         throw error;
       }
+    },
+
+    /**
+     * Brute-force protection (ADR-0009): consecutive failures from clients
+     * without a device cookie lock the account for them; a client that already
+     * logged in (valid device cookie) is not locked out, and only its own
+     * cookie is revoked after repeated failures. argon2 runs on every attempt,
+     * against a dummy hash for an unknown email or a locked account, so the
+     * response time does not reveal which case it is.
+     */
+    async login(
+      input: { email: string; password: string },
+      client: { deviceToken: string | undefined },
+    ): Promise<LoginResult> {
+      const credentials = await repository.findCredentials(input.email);
+      const device =
+        credentials !== undefined && client.deviceToken !== undefined
+          ? await repository.findDevice(credentials.id, client.deviceToken)
+          : undefined;
+      const lockedOut = credentials !== undefined && credentials.locked && device === undefined;
+      const usable = credentials !== undefined && !lockedOut;
+
+      const verified = await passwords.verify(
+        usable ? credentials.passwordHash : null,
+        input.password,
+      );
+
+      if (!usable || !verified) {
+        let deviceRevoked = false;
+        if (credentials !== undefined && !lockedOut) {
+          if (device === undefined) await repository.recordFailure(credentials.id);
+          else deviceRevoked = (await repository.recordDeviceFailure(device.id)).revoked;
+        }
+        return { status: 'failed', deviceRevoked };
+      }
+
+      const rehashed = passwords.needsRehash(credentials.passwordHash)
+        ? await passwords.hash(input.password)
+        : undefined;
+      const { refreshToken, deviceToken } = await db.transaction(async (tx) => {
+        const auth = createAuthRepository(tx);
+        if (rehashed !== undefined) await auth.updatePasswordHash(credentials.id, rehashed);
+        let issued: string | undefined;
+        if (device === undefined) {
+          await auth.resetFailures(credentials.id);
+          issued = await auth.insertDevice(credentials.id, DEVICE_TTL_MS);
+        } else {
+          // A trusted device only clears its own count: the account stays
+          // locked for other clients if someone else is guessing.
+          await auth.touchDevice(device.id);
+        }
+        const session = await auth.createSession(credentials.id, {
+          sessionMs: SESSION_TTL_MS,
+          tokenMs: REFRESH_TOKEN_TTL_MS,
+        });
+        return { refreshToken: session, deviceToken: issued };
+      });
+      const { accessToken, expiresIn } = await tokens.issueAccessToken(credentials.id);
+      return { status: 'succeeded', accessToken, expiresIn, refreshToken, deviceToken };
     },
   };
 }

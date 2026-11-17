@@ -1,3 +1,4 @@
+import cookie from '@fastify/cookie';
 import Fastify, { LogController, type FastifyBaseLogger } from 'fastify';
 import {
   serializerCompiler,
@@ -73,6 +74,8 @@ export async function buildApp({ logger, database, auth, docs, http }: AppDepend
   registerRequestIdHeader(app);
   registerErrorHandler(app);
   await registerSecurity(app, { corsOrigins: http.corsOrigins });
+  // Unsigned: cookie values are random tokens checked against their stored hash.
+  await app.register(cookie);
 
   // Before any route, so every route is documented.
   if (docs.enabled) await registerOpenApi(app);
