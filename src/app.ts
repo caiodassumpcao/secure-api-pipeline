@@ -16,7 +16,7 @@ import { taskRoutes } from './modules/tasks/tasks.routes.ts';
 import { createTasksService } from './modules/tasks/tasks.service.ts';
 import { workspaceRoutes } from './modules/workspaces/workspaces.routes.ts';
 import { createWorkspacesService } from './modules/workspaces/workspaces.service.ts';
-import { authRoutes } from './modules/auth/auth.routes.ts';
+import { authRoutes, meRoutes } from './modules/auth/auth.routes.ts';
 import { createAuthService } from './modules/auth/auth.service.ts';
 import type { PasswordHasher } from './modules/auth/password.ts';
 import type { TokenService } from './modules/auth/tokens.ts';
@@ -82,15 +82,17 @@ export async function buildApp({ logger, database, auth, docs, http }: AppDepend
 
   await app.register(healthRoutes, { database });
 
+  const authService = createAuthService({ db: database.db, ...auth });
   await app.register(authRoutes, {
     prefix: '/v1/auth',
-    service: createAuthService({ db: database.db, ...auth }),
+    service: authService,
     allowedOrigins: http.corsOrigins,
   });
 
   await app.register(
     async (v1) => {
       registerAuthentication(v1, createBearerAuthenticator(auth.tokens));
+      await v1.register(meRoutes, { service: authService });
       await v1.register(workspaceRoutes, { service: createWorkspacesService(database.db) });
       await v1.register(memberRoutes, { service: createMembersService(database.db) });
       await v1.register(projectRoutes, { service: createProjectsService(database.db) });

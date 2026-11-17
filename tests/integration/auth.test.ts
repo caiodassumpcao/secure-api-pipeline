@@ -459,3 +459,102 @@ describe('POST /v1/auth/refresh', () => {
     expectStatus(await refresh(refreshToken, { origin: 'http://localhost:80' }), 200);
   });
 });
+
+describe('POST /v1/auth/logout', () => {
+  function logout(refreshToken: string | undefined, headers: Record<string, string> = {}) {
+    return api.app.inject({
+      method: 'POST',
+      url: '/v1/auth/logout',
+      headers: {
+        ...headers,
+        ...(refreshToken === undefined ? {} : { cookie: `${REFRESH}=${refreshToken}` }),
+      },
+    });
+  }
+
+  it('ends the session and clears the cookie', async () => {
+    const { refreshToken } = await session();
+
+    const response = await logout(refreshToken);
+
+    expect(response.statusCode).toBe(204);
+    expect(cookie(response, REFRESH)).toMatchObject({ value: '', path: '/v1/auth' });
+    expect(await familyOf(refreshToken)).toEqual({ revoked_reason: 'logout' });
+    expect((await refresh(refreshToken)).statusCode).toBe(401);
+  });
+
+  it('leaves access tokens valid until they expire, by design', async () => {
+    const account = await register();
+    const response = await login(account.email, PASSWORD);
+    const { accessToken } = response.json<{ accessToken: string }>();
+
+    await logout(cookie(response, REFRESH)?.value);
+
+    const me = await api.app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(me.statusCode).toBe(200);
+  });
+
+  it('is idempotent and needs no session', async () => {
+    const { refreshToken } = await session();
+    expect((await logout(refreshToken)).statusCode).toBe(204);
+
+    expect((await logout(refreshToken)).statusCode).toBe(204);
+    expect((await logout(undefined)).statusCode).toBe(204);
+  });
+
+  it('refuses cross-site requests', async () => {
+    const { refreshToken } = await session();
+
+    const response = await logout(refreshToken, { origin: 'https://evil.example' });
+
+    expect(response.statusCode).toBe(403);
+    expect(await familyOf(refreshToken)).toEqual({ revoked_reason: null });
+  });
+});
+
+describe('GET /v1/me', () => {
+  it('returns the caller and their memberships', async () => {
+    const account = await register();
+    const { accessToken } = (await login(account.email, PASSWORD)).json<{ accessToken: string }>();
+    const headers = { authorization: `Bearer ${accessToken}` };
+    const created = await api.app.inject({
+      method: 'POST',
+      url: '/v1/workspaces',
+      headers,
+      payload: { name: 'Team', slug: api.uniqueSlug('team') },
+    });
+    expectStatus(created, 201);
+
+    const response = await api.app.inject({ method: 'GET', url: '/v1/me', headers });
+
+    expectStatus(response, 200);
+    expect(response.json()).toEqual({
+      id: account.id,
+      email: account.email,
+      name: 'Ana',
+      createdAt: expect.any(String),
+      memberships: [
+        {
+          workspaceId: expect.any(String),
+          name: 'Personal',
+          slug: expect.stringMatching(/^personal-/),
+          role: 'owner',
+        },
+        {
+          workspaceId: created.json<{ id: string }>().id,
+          name: 'Team',
+          slug: expect.any(String),
+          role: 'owner',
+        },
+      ],
+    });
+  });
+
+  it('requires an access token', async () => {
+    expect((await api.as(null).get('/v1/me')).statusCode).toBe(401);
+  });
+});

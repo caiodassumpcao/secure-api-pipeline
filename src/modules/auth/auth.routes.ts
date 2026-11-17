@@ -1,7 +1,9 @@
 import type { FastifyPluginCallbackZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
-import { idSchema, problemResponses, timestampSchema } from '../../lib/schemas.ts';
+import { ROLES } from '../../db/schema.ts';
+import { idSchema, noContentSchema, problemResponses, timestampSchema } from '../../lib/schemas.ts';
+import { currentUser } from '../../plugins/authentication.ts';
 import { INVALID_CREDENTIALS, type AuthService } from './auth.service.ts';
 import {
   clearDeviceCookie,
@@ -147,5 +149,60 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
     },
   );
 
+  app.post(
+    '/logout',
+    {
+      schema: {
+        tags,
+        summary: 'End the session of the refresh-token cookie',
+        description:
+          'Always 204, whether or not a session was found. Access tokens already issued stay valid until they expire.',
+        security: refreshCookieSecurity,
+        response: { 204: noContentSchema, ...problemResponses(403) },
+      },
+    },
+    async (request, reply) => {
+      assertNotCrossSite(request, allowedOrigins);
+      await service.logout(readTokenCookie(request, REFRESH_COOKIE));
+      clearRefreshCookie(reply);
+      return reply.code(204).send(null);
+    },
+  );
+
+  done();
+};
+
+export const meSchema = userSchema
+  .extend({
+    memberships: z
+      .array(
+        z.object({
+          workspaceId: idSchema,
+          name: z.string(),
+          slug: z.string(),
+          role: z.enum(ROLES),
+        }),
+      )
+      .describe('Up to 100 workspaces; `GET /v1/workspaces` lists them all with pagination.'),
+  })
+  .meta({ id: 'Me' });
+
+export interface MeRoutesOptions {
+  readonly service: AuthService;
+}
+
+/** `/v1/me`, behind authentication. */
+export const meRoutes: FastifyPluginCallbackZod<MeRoutesOptions> = (app, { service }, done) => {
+  app.get(
+    '/me',
+    {
+      schema: {
+        tags,
+        summary: 'The caller: account and workspace memberships',
+        response: { 200: meSchema, ...problemResponses(401) },
+      },
+    },
+    async (request) => service.me(currentUser(request).id),
+  );
   done();
 };

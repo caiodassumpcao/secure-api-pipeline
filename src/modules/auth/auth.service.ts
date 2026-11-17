@@ -1,9 +1,13 @@
 import type { Db } from '../../db/database.ts';
 import { isUniqueViolation } from '../../db/errors.ts';
+import type { Role } from '../../db/schema.ts';
 import { uuidv7 } from '../../lib/ids.ts';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
 import { createMembersRepository } from '../members/members.repository.ts';
 import { createWorkspacesRepository } from '../workspaces/workspaces.repository.ts';
+
+/** Memberships listed by `/v1/me`; `/v1/workspaces` paginates through all of them. */
+export const ME_MEMBERSHIPS_LIMIT = 100;
 import { createAuthRepository, type UserRow } from './auth.repository.ts';
 import { DEVICE_TTL_MS, REFRESH_TOKEN_TTL_MS, SESSION_TTL_MS } from './policy.ts';
 import { passwordPolicyIssues, type PasswordHasher } from './password.ts';
@@ -20,6 +24,10 @@ export interface AuthServiceDependencies {
   readonly db: Db;
   readonly passwords: PasswordHasher;
   readonly tokens: TokenService;
+}
+
+export interface Me extends User {
+  memberships: { workspaceId: string; name: string; slug: string; role: Role }[];
 }
 
 export function toUser(row: UserRow): User {
@@ -205,6 +213,38 @@ export function createAuthService({ db, passwords, tokens }: AuthServiceDependen
         expiresIn,
         refreshToken: outcome.next.token,
         refreshExpiresAt: outcome.next.expiresAt,
+      };
+    },
+
+    /**
+     * Ends the session the refresh cookie belongs to. Idempotent: an unknown,
+     * expired or already revoked session is not an error. Access tokens already
+     * issued stay valid until they expire (15 minutes, ADR-0004).
+     */
+    async logout(refreshToken: string | undefined): Promise<{ userId: string } | undefined> {
+      if (refreshToken === undefined) return undefined;
+      const session = await repository.findSession(refreshToken);
+      if (session === undefined) return undefined;
+      await repository.revokeFamily(session.familyId, 'logout');
+      return { userId: session.userId };
+    },
+
+    async me(userId: string): Promise<Me> {
+      const user = await repository.findUser(userId);
+      if (user === undefined) {
+        throw new HttpProblem(ProblemTypes.unauthorized, 'The account no longer exists.');
+      }
+      const workspaces = await createWorkspacesRepository(db).listForUser(userId, {
+        limit: ME_MEMBERSHIPS_LIMIT,
+      });
+      return {
+        ...toUser(user),
+        memberships: workspaces.slice(0, ME_MEMBERSHIPS_LIMIT).map((workspace) => ({
+          workspaceId: workspace.id,
+          name: workspace.name,
+          slug: workspace.slug,
+          role: workspace.role,
+        })),
       };
     },
   };

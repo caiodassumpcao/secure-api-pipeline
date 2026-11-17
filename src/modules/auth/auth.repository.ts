@@ -215,6 +215,16 @@ export function createAuthRepository(db: Executor) {
       return { token, expiresAt: row.expiresAt };
     },
 
+    /** The session a refresh token belongs to, whatever its state. */
+    async findSession(token: string): Promise<{ familyId: string; userId: string } | undefined> {
+      const [row] = await db
+        .select({ familyId: refreshTokens.familyId, userId: refreshTokenFamilies.userId })
+        .from(refreshTokens)
+        .innerJoin(refreshTokenFamilies, eq(refreshTokenFamilies.id, refreshTokens.familyId))
+        .where(eq(refreshTokens.tokenHash, hashOpaqueToken(token)));
+      return row;
+    },
+
     /** Ends a session: every token of the family stops working. */
     async revokeFamily(familyId: string, reason: 'logout' | 'reuse'): Promise<void> {
       await db
