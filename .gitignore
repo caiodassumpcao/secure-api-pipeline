@@ -61,7 +61,6 @@ tests/k6/results/
 # Editors and IDEs
 .vscode/*
 !.vscode/extensions.json
-!.vscode/settings.json
 .idea/
 *.swp
 *.swo
