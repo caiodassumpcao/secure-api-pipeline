@@ -31,6 +31,7 @@ import { registerOpenApi } from './plugins/openapi.ts';
 import { registerGlobalRateLimit } from './plugins/rate-limit.ts';
 import { generateRequestId, registerRequestIdHeader } from './plugins/request-id.ts';
 import { registerSecurity, trustProxyOption } from './plugins/security.ts';
+import { instrumentService } from './telemetry/traced.ts';
 
 /** Request body cap (DoS control, DESIGN §5.1). */
 export const BODY_LIMIT_BYTES = 100 * 1024;
@@ -95,7 +96,10 @@ export async function buildApp({ logger, database, auth, docs, limits, http }: A
 
   await app.register(healthRoutes, { database });
 
-  const authService = createAuthService({ db: database.db, ...auth, limiter: limits.limiter });
+  const authService = instrumentService(
+    'auth',
+    createAuthService({ db: database.db, ...auth, limiter: limits.limiter }),
+  );
   await app.register(authRoutes, {
     prefix: '/v1/auth',
     service: authService,
@@ -107,15 +111,25 @@ export async function buildApp({ logger, database, auth, docs, limits, http }: A
     async (v1) => {
       registerAuthentication(v1, createBearerAuthenticator(auth.tokens));
       await v1.register(meRoutes, { service: authService });
-      await v1.register(workspaceRoutes, { service: createWorkspacesService(database.db) });
-      await v1.register(memberRoutes, { service: createMembersService(database.db) });
+      await v1.register(workspaceRoutes, {
+        service: instrumentService('workspaces', createWorkspacesService(database.db)),
+      });
+      await v1.register(memberRoutes, {
+        service: instrumentService('members', createMembersService(database.db)),
+      });
       await v1.register(invitationRoutes, {
-        service: createInvitationsService(database.db),
+        service: instrumentService('invitations', createInvitationsService(database.db)),
         limiter: limits.limiter,
       });
-      await v1.register(projectRoutes, { service: createProjectsService(database.db) });
-      await v1.register(taskRoutes, { service: createTasksService(database.db) });
-      await v1.register(auditRoutes, { service: createAuditService(database.db) });
+      await v1.register(projectRoutes, {
+        service: instrumentService('projects', createProjectsService(database.db)),
+      });
+      await v1.register(taskRoutes, {
+        service: instrumentService('tasks', createTasksService(database.db)),
+      });
+      await v1.register(auditRoutes, {
+        service: instrumentService('audit', createAuditService(database.db)),
+      });
     },
     { prefix: '/v1' },
   );

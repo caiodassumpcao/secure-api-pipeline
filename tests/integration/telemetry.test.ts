@@ -124,12 +124,19 @@ describe('traces', () => {
     });
   });
 
-  it('nest the Fastify request span under the HTTP server span', async () => {
+  it('read HTTP request → Fastify request → service operation → queries', async () => {
     const server = await receiver.waitFor(() => serverSpan('/v1/workspaces/:wsId'));
+    const inTrace = () => receiver.spans().filter((span) => span.traceId === server.traceId);
+    const operation = await receiver.waitFor(() =>
+      inTrace().find((span) => span.name === 'workspaces.get'),
+    );
 
-    const children = receiver.spans().filter((span) => span.parentSpanId === server.spanId);
-
-    expect(children.map((span) => span.scope)).toContain('@fastify/otel');
+    const request = inTrace().find((span) => span.spanId === operation.parentSpanId);
+    expect(request?.scope).toBe('@fastify/otel');
+    expect(request?.parentSpanId).toBe(server.spanId);
+    const queries = inTrace().filter((span) => span.parentSpanId === operation.spanId);
+    expect(queries.length).toBeGreaterThan(0);
+    expect(queries.every((span) => span.attributes['db.system.name'] === 'postgresql')).toBe(true);
   });
 
   it('carry the request id and the opaque user and workspace ids, nothing personal', async () => {
