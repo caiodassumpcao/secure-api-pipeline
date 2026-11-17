@@ -4,6 +4,7 @@ import type { Role } from '../../db/schema.ts';
 import { uuidv7 } from '../../lib/ids.ts';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
 import type { RateLimiter } from '../../lib/rate-limiter.ts';
+import { recordAuditEvent, type RequestContext } from '../audit/audit.ts';
 import { createMembersRepository } from '../members/members.repository.ts';
 import { createWorkspacesRepository } from '../workspaces/workspaces.repository.ts';
 
@@ -80,7 +81,10 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
      * transaction. The password is hashed before the email is checked, so a
      * taken address does not answer faster than a new one.
      */
-    async register(input: { email: string; password: string; name: string }): Promise<User> {
+    async register(
+      input: { email: string; password: string; name: string },
+      context: RequestContext,
+    ): Promise<User> {
       const issues = passwordPolicyIssues(input.password, { email: input.email });
       if (issues.length > 0) {
         throw new HttpProblem(
@@ -106,6 +110,16 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
             slug: `personal-${workspaceId.replaceAll('-', '')}`,
           });
           await createMembersRepository(tx).insert(workspaceId, user.id, 'owner');
+          await recordAuditEvent(
+            tx,
+            {
+              action: 'auth.registered',
+              actorId: user.id,
+              target: `user:${user.id}`,
+              metadata: { personalWorkspaceId: workspaceId },
+            },
+            context,
+          );
           return toUser(user);
         });
       } catch (error) {
@@ -130,7 +144,7 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
      */
     async login(
       input: { email: string; password: string },
-      client: { deviceToken: string | undefined },
+      client: { deviceToken: string | undefined } & RequestContext,
     ): Promise<LoginResult> {
       const credentials = await repository.findCredentials(input.email);
       const device =
@@ -153,12 +167,31 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
       );
 
       if (!usable || !verified) {
-        let deviceRevoked = false;
-        if (credentials !== undefined && !lockedOut) {
-          if (device === undefined) await repository.recordFailure(credentials.id);
-          else deviceRevoked = (await repository.recordDeviceFailure(device.id)).revoked;
-        }
-        return { status: 'failed', deviceRevoked };
+        // The email of an unknown account is not recorded: it may be a typo'd
+        // address of someone else, or a password typed in the wrong field.
+        return db.transaction(async (tx) => {
+          const auth = createAuthRepository(tx);
+          let deviceRevoked = false;
+          let locked = false;
+          if (credentials !== undefined && !lockedOut) {
+            if (device === undefined) locked = (await auth.recordFailure(credentials.id)).locked;
+            else deviceRevoked = (await auth.recordDeviceFailure(device.id)).revoked;
+          }
+          const target = credentials === undefined ? null : `user:${credentials.id}`;
+          const reason =
+            credentials === undefined ? 'unknown_account' : lockedOut ? 'locked' : 'wrong_password';
+          await recordAuditEvent(
+            tx,
+            {
+              action: 'auth.login.failed',
+              target,
+              metadata: { reason, trustedDevice: device !== undefined, deviceRevoked },
+            },
+            client,
+          );
+          if (locked) await recordAuditEvent(tx, { action: 'auth.locked', target }, client);
+          return { status: 'failed', deviceRevoked } as const;
+        });
       }
 
       const rehashed = passwords.needsRehash(credentials.passwordHash)
@@ -180,6 +213,16 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
           sessionMs: SESSION_TTL_MS,
           tokenMs: REFRESH_TOKEN_TTL_MS,
         });
+        await recordAuditEvent(
+          tx,
+          {
+            action: 'auth.login.succeeded',
+            actorId: credentials.id,
+            target: `user:${credentials.id}`,
+            metadata: { trustedDevice: device !== undefined },
+          },
+          client,
+        );
         return { refreshToken: session, deviceToken: issued };
       });
       const { accessToken, expiresIn } = await tokens.issueAccessToken(credentials.id);
@@ -192,7 +235,10 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
      * so the whole session is revoked, unless the exchange happened within the
      * last seconds, which is two tabs refreshing at once.
      */
-    async refresh(refreshToken: string | undefined): Promise<RefreshResult> {
+    async refresh(
+      refreshToken: string | undefined,
+      context: RequestContext,
+    ): Promise<RefreshResult> {
       if (refreshToken === undefined) return { status: 'rejected', clearCookie: false };
 
       const outcome = await db.transaction(async (tx) => {
@@ -204,6 +250,16 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
         if (stored.rotated) {
           if (stored.rotatedWithinGrace) return { status: 'rejected', clearCookie: false } as const;
           await auth.revokeFamily(stored.familyId, 'reuse');
+          // Whoever presented the token is unknown: it may be the thief or the owner.
+          await recordAuditEvent(
+            tx,
+            {
+              action: 'auth.refresh.reuse_detected',
+              target: `user:${stored.userId}`,
+              metadata: { sessionId: stored.familyId },
+            },
+            context,
+          );
           return {
             status: 'reuse_detected',
             userId: stored.userId,
@@ -231,12 +287,23 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
      * expired or already revoked session is not an error. Access tokens already
      * issued stay valid until they expire (15 minutes, ADR-0004).
      */
-    async logout(refreshToken: string | undefined): Promise<{ userId: string } | undefined> {
-      if (refreshToken === undefined) return undefined;
+    async logout(refreshToken: string | undefined, context: RequestContext): Promise<void> {
+      if (refreshToken === undefined) return;
       const session = await repository.findSession(refreshToken);
-      if (session === undefined) return undefined;
-      await repository.revokeFamily(session.familyId, 'logout');
-      return { userId: session.userId };
+      if (session === undefined) return;
+      await db.transaction(async (tx) => {
+        await createAuthRepository(tx).revokeFamily(session.familyId, 'logout');
+        await recordAuditEvent(
+          tx,
+          {
+            action: 'auth.logout',
+            actorId: session.userId,
+            target: `user:${session.userId}`,
+            metadata: { sessionId: session.familyId },
+          },
+          context,
+        );
+      });
     },
 
     async me(userId: string): Promise<Me> {

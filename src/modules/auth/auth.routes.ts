@@ -5,6 +5,7 @@ import { rateLimitBy, tooManyRequests, type RateLimiter } from '../../lib/rate-l
 import { ROLES } from '../../db/schema.ts';
 import { idSchema, noContentSchema, problemResponses, timestampSchema } from '../../lib/schemas.ts';
 import { currentUser } from '../../plugins/authentication.ts';
+import { requestContext } from '../audit/audit.ts';
 import { INVALID_CREDENTIALS, type AuthService } from './auth.service.ts';
 import {
   clearDeviceCookie,
@@ -90,7 +91,7 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
       preHandler: rateLimitBy(limiter, REGISTER_PER_IP, (request) => request.ip),
     },
     async (request, reply) => {
-      const user = await service.register(request.body);
+      const user = await service.register(request.body, requestContext(request));
       return reply.code(201).header('location', '/v1/me').send(user);
     },
   );
@@ -112,6 +113,7 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
     async (request, reply) => {
       const result = await service.login(request.body, {
         deviceToken: readTokenCookie(request, DEVICE_COOKIE),
+        ...requestContext(request),
       });
       if (result.status === 'rate_limited') {
         reply.header('retry-after', String(result.retryAfterSeconds));
@@ -149,7 +151,10 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
     },
     async (request, reply) => {
       assertNotCrossSite(request, allowedOrigins);
-      const result = await service.refresh(readTokenCookie(request, REFRESH_COOKIE));
+      const result = await service.refresh(
+        readTokenCookie(request, REFRESH_COOKIE),
+        requestContext(request),
+      );
       if (result.status !== 'rotated') {
         if (result.status === 'reuse_detected' || result.clearCookie) clearRefreshCookie(reply);
         reply.header('www-authenticate', CHALLENGE);
@@ -178,7 +183,7 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
     },
     async (request, reply) => {
       assertNotCrossSite(request, allowedOrigins);
-      await service.logout(readTokenCookie(request, REFRESH_COOKIE));
+      await service.logout(readTokenCookie(request, REFRESH_COOKIE), requestContext(request));
       clearRefreshCookie(reply);
       return reply.code(204).send(null);
     },

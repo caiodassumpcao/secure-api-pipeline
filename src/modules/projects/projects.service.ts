@@ -2,6 +2,7 @@ import type { Db } from '../../db/database.ts';
 import { uuidv7 } from '../../lib/ids.ts';
 import { toPage, type Page, type PageRequest } from '../../lib/pagination.ts';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
+import { recordAuditEvent, type RequestContext } from '../audit/audit.ts';
 import { authorize } from '../auth/access.ts';
 import { createProjectsRepository, type ProjectRow } from './projects.repository.ts';
 
@@ -63,11 +64,31 @@ export function createProjectsService(db: Db) {
     },
 
     /** Archived projects keep their tasks, readable but frozen. */
-    async archive(userId: string, workspaceId: string, projectId: string): Promise<void> {
+    async archive(
+      userId: string,
+      workspaceId: string,
+      projectId: string,
+      context: RequestContext,
+    ): Promise<void> {
       await authorize(db, workspaceId, userId, 'project:write');
-      if (!(await repository.archive(workspaceId, projectId))) {
-        throw new HttpProblem(ProblemTypes.notFound, PROJECT_NOT_FOUND);
-      }
+      await db.transaction(async (tx) => {
+        const archivedNow = await createProjectsRepository(tx).archive(workspaceId, projectId);
+        if (archivedNow === undefined) {
+          throw new HttpProblem(ProblemTypes.notFound, PROJECT_NOT_FOUND);
+        }
+        if (archivedNow) {
+          await recordAuditEvent(
+            tx,
+            {
+              action: 'project.archived',
+              actorId: userId,
+              workspaceId,
+              target: `project:${projectId}`,
+            },
+            context,
+          );
+        }
+      });
     },
   };
 }

@@ -12,6 +12,7 @@ import {
   timestampSchema,
 } from '../../lib/schemas.ts';
 import { currentUser } from '../../plugins/authentication.ts';
+import { requestContext } from '../audit/audit.ts';
 import type { WorkspacesService } from './workspaces.service.ts';
 
 const slugSchema = z
@@ -116,7 +117,7 @@ export const workspaceRoutes: FastifyPluginCallbackZod<WorkspaceRoutesOptions> =
       },
     },
     async (request, reply) => {
-      await service.delete(currentUser(request).id, request.params.wsId);
+      await service.delete(currentUser(request).id, request.params.wsId, requestContext(request));
       return reply.code(204).send(null);
     },
   );

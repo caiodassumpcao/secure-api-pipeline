@@ -1,13 +1,22 @@
-import { isNotNull, lte, or, sql } from 'drizzle-orm';
+import { inArray, isNotNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { Logger } from 'pino';
-import type { Db } from '../db/database.ts';
-import { rateLimits, refreshTokenFamilies, trustedDevices } from '../db/schema.ts';
+import type { Db, Executor } from '../db/database.ts';
+import {
+  AUDIT_RETENTION_DAYS,
+  auditEvents,
+  rateLimits,
+  refreshTokenFamilies,
+  trustedDevices,
+} from '../db/schema.ts';
 
 /** How often each API instance tries to clean up. */
 export const CLEANUP_INTERVAL_MS = 60 * 60_000;
 
 /** Only one instance cleans up at a time; the others skip that round. */
 const CLEANUP_LOCK_KEY = 7_394_201_002;
+
+/** Audit events deleted per statement, to keep each one short. */
+const AUDIT_BATCH_SIZE = 5_000;
 
 export interface CleanupReport {
   readonly skipped: boolean;
@@ -17,9 +26,10 @@ export interface CleanupReport {
 
 /**
  * Deletes what has expired: rate-limit windows, sessions past their absolute
- * lifetime (revoked ones included) and device cookies that expired or were
- * revoked. Holds a transaction-level advisory lock, so concurrent instances
- * never do the work twice.
+ * lifetime (revoked ones included), device cookies that expired or were
+ * revoked, and audit events older than the retention period (the only deletes
+ * the audit trigger allows). Holds a transaction-level advisory lock, so
+ * concurrent instances never do the work twice.
  */
 export async function runCleanup(db: Db): Promise<CleanupReport> {
   return db.transaction(async (tx) => {
@@ -43,9 +53,26 @@ export async function runCleanup(db: Db): Promise<CleanupReport> {
             or(lte(trustedDevices.expiresAt, sql`now()`), isNotNull(trustedDevices.revokedAt)),
           ),
       ),
+      audit_events: await deleteExpiredAuditEvents(tx),
     };
     return { skipped: false, deleted };
   });
+}
+
+async function deleteExpiredAuditEvents(tx: Executor): Promise<number> {
+  const cutoff = sql`now() - make_interval(days => ${AUDIT_RETENTION_DAYS})`;
+  let total = 0;
+  for (;;) {
+    const batch = tx
+      .select({ id: auditEvents.id })
+      .from(auditEvents)
+      .where(lt(auditEvents.createdAt, cutoff))
+      .limit(AUDIT_BATCH_SIZE);
+    const deleted =
+      (await tx.delete(auditEvents).where(inArray(auditEvents.id, batch))).rowCount ?? 0;
+    total += deleted;
+    if (deleted < AUDIT_BATCH_SIZE) return total;
+  }
 }
 
 /**

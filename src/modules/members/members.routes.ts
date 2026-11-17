@@ -4,6 +4,7 @@ import { ROLES } from '../../db/schema.ts';
 import { pageSchema, paginationQuery } from '../../lib/pagination.ts';
 import { idSchema, noContentSchema, problemResponses, timestampSchema } from '../../lib/schemas.ts';
 import { currentUser } from '../../plugins/authentication.ts';
+import { requestContext } from '../audit/audit.ts';
 import type { MembersService } from './members.service.ts';
 
 const roleSchema = z.enum(ROLES);
@@ -62,7 +63,12 @@ export const memberRoutes: FastifyPluginCallbackZod<MemberRoutesOptions> = (
       },
     },
     async (request, reply) => {
-      const member = await service.add(currentUser(request).id, request.params.wsId, request.body);
+      const member = await service.add(
+        currentUser(request).id,
+        request.params.wsId,
+        request.body,
+        requestContext(request),
+      );
       return reply
         .code(201)
         .header('location', `/v1/workspaces/${request.params.wsId}/members/${member.userId}`)
@@ -101,6 +107,7 @@ export const memberRoutes: FastifyPluginCallbackZod<MemberRoutesOptions> = (
         request.params.wsId,
         request.params.userId,
         request.body.role,
+        requestContext(request),
       ),
   );
 
@@ -116,7 +123,12 @@ export const memberRoutes: FastifyPluginCallbackZod<MemberRoutesOptions> = (
       },
     },
     async (request, reply) => {
-      await service.remove(currentUser(request).id, request.params.wsId, request.params.userId);
+      await service.remove(
+        currentUser(request).id,
+        request.params.wsId,
+        request.params.userId,
+        requestContext(request),
+      );
       return reply.code(204).send(null);
     },
   );

@@ -72,14 +72,18 @@ export function createProjectsRepository(db: Executor) {
       return row;
     },
 
-    /** Idempotent: an archived project keeps its original archive time. */
-    async archive(workspaceId: string, projectId: string): Promise<boolean> {
-      const updated = await db
+    /**
+     * Idempotent: an archived project keeps its original archive time. Returns
+     * `undefined` for an unknown project, else whether this call archived it.
+     */
+    async archive(workspaceId: string, projectId: string): Promise<boolean | undefined> {
+      const [row] = await db
         .update(projects)
         .set({ archivedAt: sql`coalesce(${projects.archivedAt}, now())` })
         .where(inWorkspace(workspaceId, projectId))
-        .returning({ id: projects.id });
-      return updated.length > 0;
+        // now() is the transaction start: equal only if this statement set it.
+        .returning({ archivedNow: sql<boolean>`${projects.archivedAt} = now()` });
+      return row?.archivedNow;
     },
   };
 }
