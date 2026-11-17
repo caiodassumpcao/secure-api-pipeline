@@ -222,7 +222,7 @@ OpenTelemetry, preloaded before the app (ADR-0006). Nothing a client sends as cr
 - **Export**: with `OTEL_EXPORTER_OTLP_ENDPOINT`, traces, metrics and logs are pushed over OTLP/HTTP, with bounded queues that drop data rather than slow requests. Without it nothing is pushed, and `/metrics` is still served.
 - **`/metrics`**: Prometheus text on `METRICS_HOST:METRICS_PORT` (9464), its own server, never the public port, never published by Compose nor routed by the proxy. Names differ by the unit suffix: Prometheus appends it to OTLP metrics (`http_server_request_duration_seconds`), the JavaScript exporter does not (`http_server_request_duration`). Counters end in `_total` in both.
 - **Exemplars**: not supported by the OpenTelemetry JavaScript SDK; trace-derived metrics belong to `observability-stack` (Tempo).
-- **Local**: `docker compose --profile observability up` adds `grafana/otel-lgtm` (Grafana, Tempo, Loki and Prometheus in one container, development only) with a provisioned dashboard: request rate, status codes, latency and server errors by route, failed logins by reason, refresh-token reuse, tasks created, connection pool, query latency, event loop. `pnpm smoke:observability` checks it end to end.
+- **Local**: `docker compose --profile observability up` adds `grafana/otel-lgtm` (Grafana, Tempo, Loki and Prometheus in one container, development only) with a provisioned dashboard: request rate, status codes, latency and server errors by route, failed logins by reason, refresh-token reuse, tasks created, connection pool, query latency, event loop. `pnpm smoke:observability` checks it end to end. Walkthrough: [observability.md](observability.md).
 
 ---
 
@@ -336,7 +336,7 @@ secure-api-pipeline/
 │   ├── ISSUE_TEMPLATE/ · pull_request_template.md · CODEOWNERS · dependabot.yml
 ├── deploy/ (compose.prod.yaml, nginx/, dr.yaml, README.md)
 ├── docs/
-│   ├── DESIGN.md · problems.md · threat-model.md · runbook.md · security-pipeline.md
+│   ├── DESIGN.md · problems.md · threat-model.md · observability.md · runbook.md · security-pipeline.md
 │   └── adr/
 ├── observability/grafana/ (dashboard and its provisioning, for the observability profile)
 ├── scripts/ (generate-keys, build-blocklist, observability-smoke, seed)
@@ -395,7 +395,7 @@ Each phase = one branch → PR → merge → release-please release PR merged (e
 - OTel SDK preloaded with `node --import`; traces HTTP → service → pg named by route template; metrics (§6) over OTLP and on an internal `/metrics` port; logs correlated by `trace_id` and exported over OTLP.
 - Privacy: opaque ids only, no headers, bodies, query values, SQL parameters or error messages; inbound trace context ignored; security suite over every exported signal.
 - `observability` Compose profile (`grafana/otel-lgtm`) with a provisioned dashboard, smoke test and the `observability` CI job, added to the required checks.
-- ADR-0006 telemetry.
+- ADR-0006 telemetry · `docs/observability.md`.
 
 **Done when:** a request produces a trace (HTTP → service → pg span), latency histogram with route labels, and a log line with matching `trace_id`, visible in local Grafana.
 
