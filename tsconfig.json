@@ -25,5 +25,5 @@
 
     "noEmit": true
   },
-  "include": ["src", "tests", "vitest.config.ts", "drizzle.config.ts"]
+  "include": ["src", "scripts", "tests", "vitest.config.ts", "drizzle.config.ts"]
 }

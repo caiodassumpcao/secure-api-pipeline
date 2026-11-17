@@ -25,12 +25,34 @@ describe('loadConfig', () => {
       log: { level: 'info' },
       database: { url: DATABASE_URL },
       docs: { enabled: true },
+      jwt: {
+        privateKeyFile: undefined,
+        publicKeyFile: undefined,
+        previousPublicKeyFile: undefined,
+        issuer: 'secure-api-pipeline',
+        audience: 'secure-api-pipeline',
+      },
+      cors: { origins: [] },
+      trustProxy: false,
     });
   });
 
   it('reads every supported variable', () => {
     const config = loadConfig(
-      { NODE_ENV: 'test', HOST: '0.0.0.0', PORT: '8080', LOG_LEVEL: 'debug', DATABASE_URL },
+      {
+        NODE_ENV: 'test',
+        HOST: '0.0.0.0',
+        PORT: '8080',
+        LOG_LEVEL: 'debug',
+        DATABASE_URL,
+        JWT_PRIVATE_KEY_FILE: '/run/secrets/jwt_private_key',
+        JWT_PUBLIC_KEY_FILE: '/run/secrets/jwt_public_key',
+        JWT_PREVIOUS_PUBLIC_KEY_FILE: '/run/secrets/jwt_previous_public_key',
+        JWT_ISSUER: 'https://api.example.com',
+        JWT_AUDIENCE: 'example-clients',
+        CORS_ORIGINS: 'https://app.example.com, http://localhost:5173',
+        TRUST_PROXY: '1',
+      },
       noFiles,
     );
 
@@ -40,6 +62,73 @@ describe('loadConfig', () => {
       log: { level: 'debug' },
       database: { url: DATABASE_URL },
       docs: { enabled: true },
+      jwt: {
+        privateKeyFile: '/run/secrets/jwt_private_key',
+        publicKeyFile: '/run/secrets/jwt_public_key',
+        previousPublicKeyFile: '/run/secrets/jwt_previous_public_key',
+        issuer: 'https://api.example.com',
+        audience: 'example-clients',
+      },
+      cors: { origins: ['https://app.example.com', 'http://localhost:5173'] },
+      trustProxy: 1,
+    });
+  });
+
+  describe('TRUST_PROXY', () => {
+    it.each([
+      ['1', 1],
+      ['10', 10],
+      ['10.0.0.1', ['10.0.0.1']],
+      ['10.0.0.0/8, 172.16.0.0/12,fd00::/8', ['10.0.0.0/8', '172.16.0.0/12', 'fd00::/8']],
+    ])('accepts %s', (value, expected) => {
+      expect(loadConfig({ DATABASE_URL, TRUST_PROXY: value }, noFiles).trustProxy).toEqual(
+        expected,
+      );
+    });
+
+    it.each([
+      'true',
+      'false',
+      '*',
+      '0',
+      '11',
+      '-1',
+      'proxy.internal',
+      '10.0.0.0/33',
+      '10.0.0.1/8/1',
+    ])('rejects %s: only hop counts and addresses are trusted, never any proxy', (value) => {
+      expect(
+        configError(() => loadConfig({ DATABASE_URL, TRUST_PROXY: value }, noFiles)).issues,
+      ).toEqual([
+        'TRUST_PROXY: must be a hop count (1-10) or a comma-separated list of IP addresses or CIDR ranges',
+      ]);
+    });
+  });
+
+  describe('CORS_ORIGINS', () => {
+    it.each([
+      'https://app.example.com/',
+      'https://app.example.com/path',
+      'ftp://files.example.com',
+      '*',
+    ])('rejects %s', (value) => {
+      expect(
+        configError(() => loadConfig({ DATABASE_URL, CORS_ORIGINS: value }, noFiles)).issues,
+      ).toEqual([
+        'CORS_ORIGINS: must be a comma-separated list of origins (scheme://host[:port], no path)',
+      ]);
+    });
+
+    it('requires https origins in production', () => {
+      const env = {
+        NODE_ENV: 'production',
+        DATABASE_URL,
+        CORS_ORIGINS: 'https://app.example.com,http://app.example.com',
+      };
+
+      expect(configError(() => loadConfig(env, noFiles)).issues).toEqual([
+        'CORS_ORIGINS: must only list https:// origins in production',
+      ]);
     });
   });
 
