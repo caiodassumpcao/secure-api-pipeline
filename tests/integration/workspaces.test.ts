@@ -29,6 +29,11 @@ describe('POST /v1/workspaces', () => {
       createdAt: expect.any(String),
     });
     expect(response.headers.location).toBe(`/v1/workspaces/${workspace.id}`);
+
+    const members = await api.as(alice).get(`/v1/workspaces/${workspace.id}/members`);
+    expect(members.json<{ data: { userId: string; role: string }[] }>().data).toEqual([
+      expect.objectContaining({ userId: alice.id, role: 'owner' }),
+    ]);
   });
 
   it('rejects a slug already in use with 409', async () => {

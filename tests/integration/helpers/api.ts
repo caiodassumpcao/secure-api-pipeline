@@ -1,5 +1,6 @@
 import type { LightMyRequestResponse } from 'fastify';
 import { buildApp, type App } from '../../../src/app.ts';
+import type { Role } from '../../../src/db/schema.ts';
 import { users } from '../../../src/db/schema.ts';
 import { uuidv7 } from '../../../src/lib/ids.ts';
 import { createLogger } from '../../../src/lib/logger.ts';
@@ -20,6 +21,14 @@ export interface ApiClient {
   post(url: string, payload?: object): Promise<LightMyRequestResponse>;
   patch(url: string, payload: object): Promise<LightMyRequestResponse>;
   delete(url: string): Promise<LightMyRequestResponse>;
+}
+
+export interface Team {
+  readonly workspaceId: string;
+  readonly owner: TestUser;
+  readonly admin: TestUser;
+  readonly member: TestUser;
+  readonly viewer: TestUser;
 }
 
 /** Real app + real PostgreSQL database (one per test file), identity via the test stub. */
@@ -86,6 +95,29 @@ export class TestApi {
     const response = await this.as(owner).post('/v1/workspaces', { name, slug: this.uniqueSlug() });
     expectStatus(response, 201);
     return response.json<{ id: string }>().id;
+  }
+
+  async addMember(actor: TestUser, workspaceId: string, user: TestUser, role: Role): Promise<void> {
+    const response = await this.as(actor).post(`/v1/workspaces/${workspaceId}/members`, {
+      email: user.email,
+      role,
+    });
+    expectStatus(response, 201);
+  }
+
+  /** A workspace with one user per role. */
+  async createTeam(): Promise<Team> {
+    const [owner, admin, member, viewer] = await Promise.all([
+      this.createUser('Owner'),
+      this.createUser('Admin'),
+      this.createUser('Member'),
+      this.createUser('Viewer'),
+    ]);
+    const workspaceId = await this.createWorkspace(owner);
+    await this.addMember(owner, workspaceId, admin, 'admin');
+    await this.addMember(owner, workspaceId, member, 'member');
+    await this.addMember(owner, workspaceId, viewer, 'viewer');
+    return { workspaceId, owner, admin, member, viewer };
   }
 }
 

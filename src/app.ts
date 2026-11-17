@@ -6,6 +6,8 @@ import {
 } from 'fastify-type-provider-zod';
 import type { Db } from './db/database.ts';
 import { healthRoutes, type ReadinessProbe } from './modules/health/health.routes.ts';
+import { memberRoutes } from './modules/members/members.routes.ts';
+import { createMembersService } from './modules/members/members.service.ts';
 import { workspaceRoutes } from './modules/workspaces/workspaces.routes.ts';
 import { createWorkspacesService } from './modules/workspaces/workspaces.service.ts';
 import { registerAuthentication, type Authenticator } from './plugins/authentication.ts';
@@ -54,6 +56,7 @@ export async function buildApp({ logger, database, authenticate }: AppDependenci
     async (v1) => {
       registerAuthentication(v1, authenticate);
       await v1.register(workspaceRoutes, { service: createWorkspacesService(database.db) });
+      await v1.register(memberRoutes, { service: createMembersService(database.db) });
     },
     { prefix: '/v1' },
   );
