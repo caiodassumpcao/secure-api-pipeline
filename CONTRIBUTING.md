@@ -23,20 +23,21 @@ To run the whole stack in containers instead: `docker compose up -d --build --wa
 
 ## Scripts
 
-| Command                 | What it does                                                                      |
-| ----------------------- | --------------------------------------------------------------------------------- |
-| `pnpm dev`              | Runs `src/main.ts` with Node's built-in TypeScript support, in watch mode         |
-| `pnpm build`            | Compiles to `dist/`                                                               |
-| `pnpm start`            | Runs the compiled build                                                           |
-| `pnpm lint`             | ESLint (type-aware, security rules) and the Prettier check                        |
-| `pnpm lint:fix`         | Fixes what ESLint and Prettier can fix                                            |
-| `pnpm typecheck`        | TypeScript in strict mode                                                         |
-| `pnpm test`             | Unit tests (no Docker needed)                                                     |
-| `pnpm test:integration` | Integration and security suites against PostgreSQL (Testcontainers, needs Docker) |
-| `pnpm test:coverage`    | Every suite, with the coverage gate (85 %)                                        |
-| `pnpm db:generate`      | Generates a SQL migration in `drizzle/` from `src/db/schema.ts`                   |
-| `pnpm db:migrate`       | Applies pending migrations to `DATABASE_URL`                                      |
-| `pnpm keys:generate`    | Writes a development Ed25519 key pair for access tokens to `keys/`                |
+| Command                    | What it does                                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                 | Runs `src/main.ts` with Node's built-in TypeScript support, in watch mode                            |
+| `pnpm build`               | Compiles to `dist/`                                                                                  |
+| `pnpm start`               | Runs the compiled build                                                                              |
+| `pnpm lint`                | ESLint (type-aware, security rules) and the Prettier check                                           |
+| `pnpm lint:fix`            | Fixes what ESLint and Prettier can fix                                                               |
+| `pnpm typecheck`           | TypeScript in strict mode                                                                            |
+| `pnpm test`                | Unit tests (no Docker needed)                                                                        |
+| `pnpm test:integration`    | Integration and security suites against PostgreSQL (Testcontainers, needs Docker)                    |
+| `pnpm test:coverage`       | Every suite, with the coverage gate (85 %)                                                           |
+| `pnpm db:generate`         | Generates a SQL migration in `drizzle/` from `src/db/schema.ts`                                      |
+| `pnpm db:migrate`          | Applies pending migrations to `DATABASE_URL`                                                         |
+| `pnpm keys:generate`       | Writes a development Ed25519 key pair for access tokens to `keys/`                                   |
+| `pnpm smoke:observability` | Checks traces, logs, metrics and the dashboard in the local Grafana ([guide](docs/observability.md)) |
 
 Run `pnpm lint && pnpm typecheck && pnpm test` before every push, and `pnpm test:integration` when a change touches data or routes; CI runs all of them. Generated migrations are reviewed like code: expand/contract, no destructive statement in the same release as the code that stops using a column.
 
@@ -79,6 +80,7 @@ Never bypass them with `--no-verify`; fix the cause instead. If gitleaks flags a
 - Errors are RFC 9457 problems produced by the single error handler: throw `HttpProblem` with a type from `src/lib/problem.ts` and document new types in [`docs/problems.md`](docs/problems.md).
 - Log through the request logger (`request.log`) or the injected pino logger — never `console`. Never log passwords, tokens, cookies or authorization headers; the logger redacts known keys and a test guards it.
 - SQL only through Drizzle or parameterized queries; migrations are generated, reviewed and committed (expand/contract).
+- Telemetry: span attributes, metric labels and log fields carry ids, never credentials, emails, names or bodies, and metric labels never take unbounded values such as raw URLs. The API starts through the telemetry preload (`node --import`); new instrumentations go in `src/telemetry/` and must pass the telemetry security suite ([ADR-0006](docs/adr/0006-opentelemetry-telemetry.md)).
 - GitHub Actions: least-privilege `permissions`, actions pinned by full commit SHA with the version in a comment.
 
 ## Tests

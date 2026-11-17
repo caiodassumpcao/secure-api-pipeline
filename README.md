@@ -15,7 +15,7 @@
 </p>
 
 > [!NOTE]
-> **Built in public, phase by phase.** v0.2 adds authentication to the v0.1 domain: Ed25519 access tokens with rotating refresh tokens, brute-force protection, an append-only audit log and member invitations, on top of tenant-isolated workspaces, projects and tasks, migrations and OpenAPI docs. Highlights and Architecture describe the v1.0 target; sections marked with a version describe what that release delivers — see the [roadmap](#roadmap).
+> **Built in public, phase by phase.** v0.3 makes the API observable: OpenTelemetry traces from each request down to its SQL queries, RED and security metrics, and logs correlated by trace id, with a local Grafana. It builds on v0.2 (Ed25519 access tokens with rotating refresh tokens, brute-force protection, an append-only audit log, member invitations) and v0.1 (tenant-isolated workspaces, projects and tasks, migrations and OpenAPI docs). Highlights and Architecture describe the v1.0 target; sections marked with a version describe what that release delivers — see the [roadmap](#roadmap).
 
 ---
 
@@ -35,7 +35,7 @@ The API is a small multi-tenant project & task tracker. Small on purpose: the fo
 | 🛡️ **DevSecOps pipeline**   | Semgrep, CodeQL, Gitleaks, OSV-Scanner, Trivy, OWASP ZAP — all reported to GitHub code scanning                     |
 | 📦 **Supply chain**         | Distroless non-root image, SBOM (SPDX + CycloneDX), cosign keyless signatures, SLSA build provenance                |
 | 🚀 **Verified deploys**     | Signature checked on the server, migrations, smoke tests, automatic rollback                                        |
-| 📈 **Observable**           | OpenTelemetry traces and metrics, logs correlated by `trace_id`                                                     |
+| 📈 **Observable**           | OpenTelemetry traces (HTTP → service → SQL), RED and security metrics, logs correlated by `trace_id`, no secrets    |
 | 🧭 **Documented decisions** | Threat model (STRIDE), ADRs, runbook                                                                                |
 
 ## Pipeline
@@ -105,12 +105,14 @@ openssl pkey -in keys/jwt-private.pem -pubout -out keys/jwt-public.pem
 
 The container runs as uid 1000: on Linux, if your uid differs, make these development keys readable by it (`chmod 644 keys/jwt-private.pem`).
 
-With local observability (Grafana, Prometheus, Tempo, Loki) — _v0.3_:
+With local observability (Grafana, Tempo, Loki, Prometheus and a provisioned dashboard):
 
 ```bash
-docker compose --profile observability up -d
-open http://localhost:3001         # Grafana
+API_OTLP_ENDPOINT=http://otel-lgtm:4318 docker compose --profile observability up -d --build --wait
+open http://localhost:3001         # Grafana: Dashboards → secure-api-pipeline → secure-api
 ```
+
+What to look at, from a trace of one request to the log lines it wrote: [`docs/observability.md`](docs/observability.md).
 
 ### Try it
 
@@ -186,6 +188,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 - Security design and controls: [`docs/DESIGN.md` §5](docs/DESIGN.md#5-security-design)
 - Threat model: [`docs/threat-model.md`](docs/threat-model.md) — data flows, STRIDE per component, personal data and retention, residual risks
 - Authentication: [ADR-0004](docs/adr/0004-token-strategy.md) tokens · [ADR-0009](docs/adr/0009-brute-force-protection.md) brute force · [ADR-0010](docs/adr/0010-member-invitations.md) invitations
+- Telemetry without secrets: [ADR-0006](docs/adr/0006-opentelemetry-telemetry.md)
 - Security pipeline: `docs/security-pipeline.md` _(v0.4)_
 
 ## Part of a platform
@@ -202,7 +205,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 - [x] Foundation — tooling, config, health, CI
 - [x] **v0.1** — Domain, data model, CRUD, tenant isolation, OpenAPI
 - [x] **v0.2** — Authentication, brute-force protection, audit log, invitations, threat model
-- [ ] **v0.3** — OpenTelemetry traces, metrics and correlated logs
+- [x] **v0.3** — OpenTelemetry traces, metrics and correlated logs, local Grafana
 - [ ] **v0.4** — DevSecOps pipeline: scanners, SBOM, signing, provenance, DAST
 - [ ] **v1.0** — Verified deploys with automatic rollback
 
@@ -212,6 +215,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 - [Architecture decision records](docs/adr/)
 - [Problem types](docs/problems.md)
 - [Threat model](docs/threat-model.md)
+- [Observability guide](docs/observability.md)
 - [Contributing](CONTRIBUTING.md)
 - Runbook — `docs/runbook.md` _(v1.0)_
 
@@ -228,6 +232,7 @@ pnpm lint && pnpm typecheck
 pnpm test                         # unit tests, no Docker needed
 pnpm test:integration             # integration and security suites (PostgreSQL via Testcontainers)
 pnpm test:coverage                # every suite, with the 85 % coverage gate
+pnpm smoke:observability          # traces, logs, metrics and dashboard in the local Grafana
 pnpm build                        # compile to dist/
 ```
 
