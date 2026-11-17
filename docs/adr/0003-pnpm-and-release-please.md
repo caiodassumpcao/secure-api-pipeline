@@ -47,3 +47,12 @@
 - A security fix younger than three days needs a temporary, reviewed `minimumReleaseAgeExclude` entry.
 - PR titles carry real weight; the `pr-title` check keeps them honest.
 - Before the first release, a token strategy for release PRs must be chosen (a GitHub App token is the usual choice).
+
+## Update (2026-11-17): token for release pull requests
+
+Completes the choice deferred above, without changing the decision.
+
+- `release-please.yml` mints a short-lived installation token with `actions/create-github-app-token` from a **GitHub App installed on this repository only**. The token is requested with exactly the permissions release-please needs (contents, pull requests and issues, for its labels: read and write), expires after one hour and is revoked when the job ends. The App ID is the `RELEASE_PLEASE_APP_ID` repository variable; its private key is the `RELEASE_PLEASE_APP_PRIVATE_KEY` secret.
+- Pull requests opened with that token trigger the `pull_request` workflows, so release PRs pass the same required checks as any other PR and the ruleset needs no bypass.
+- Alternatives rejected: a fine-grained personal access token (tied to a person, long-lived, acts as that person); a ruleset bypass for release PRs (weakens the protection of `main`); closing and reopening release PRs by hand to trigger the checks (toil, easy to forget).
+- Rotating the App's private key is a manual task, to be documented in the runbook (Phase 5).
