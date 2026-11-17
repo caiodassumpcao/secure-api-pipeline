@@ -51,6 +51,15 @@ export type LoginResult =
       readonly deviceRevoked: boolean;
     };
 
+export type RefreshResult =
+  | (Session & { readonly status: 'rotated'; readonly refreshExpiresAt: Date })
+  | {
+      readonly status: 'rejected';
+      /** False during the rotation grace period: the client already holds the newer token. */
+      readonly clearCookie: boolean;
+    }
+  | { readonly status: 'reuse_detected'; readonly userId: string; readonly familyId: string };
+
 export function createAuthService({ db, passwords, tokens }: AuthServiceDependencies) {
   const repository = createAuthRepository(db);
 
@@ -157,6 +166,46 @@ export function createAuthService({ db, passwords, tokens }: AuthServiceDependen
       });
       const { accessToken, expiresIn } = await tokens.issueAccessToken(credentials.id);
       return { status: 'succeeded', accessToken, expiresIn, refreshToken, deviceToken };
+    },
+
+    /**
+     * Rotation with reuse detection (ADR-0004): each refresh token works once.
+     * Presenting a token that was already exchanged means two parties hold it,
+     * so the whole session is revoked, unless the exchange happened within the
+     * last seconds, which is two tabs refreshing at once.
+     */
+    async refresh(refreshToken: string | undefined): Promise<RefreshResult> {
+      if (refreshToken === undefined) return { status: 'rejected', clearCookie: false };
+
+      const outcome = await db.transaction(async (tx) => {
+        const auth = createAuthRepository(tx);
+        const stored = await auth.findRefreshTokenForUpdate(refreshToken);
+        if (stored === undefined || stored.sessionEnded) {
+          return { status: 'rejected', clearCookie: true } as const;
+        }
+        if (stored.rotated) {
+          if (stored.rotatedWithinGrace) return { status: 'rejected', clearCookie: false } as const;
+          await auth.revokeFamily(stored.familyId, 'reuse');
+          return {
+            status: 'reuse_detected',
+            userId: stored.userId,
+            familyId: stored.familyId,
+          } as const;
+        }
+        if (stored.expired) return { status: 'rejected', clearCookie: true } as const;
+        const next = await auth.rotateRefreshToken(stored, REFRESH_TOKEN_TTL_MS);
+        return { status: 'rotated', userId: stored.userId, next } as const;
+      });
+
+      if (outcome.status !== 'rotated') return outcome;
+      const { accessToken, expiresIn } = await tokens.issueAccessToken(outcome.userId);
+      return {
+        status: 'rotated',
+        accessToken,
+        expiresIn,
+        refreshToken: outcome.next.token,
+        refreshExpiresAt: outcome.next.expiresAt,
+      };
     },
   };
 }

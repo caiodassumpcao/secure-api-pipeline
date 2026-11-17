@@ -31,6 +31,7 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
       components: {
         securitySchemes: {
           bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+          refreshCookie: { type: 'apiKey', in: 'cookie', name: '__Secure-refresh' },
         },
       },
       // Every route needs a token unless its schema says otherwise (`security: []`).

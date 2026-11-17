@@ -42,7 +42,7 @@ Responses never contain stack traces, SQL or internal hostnames. Server errors a
 
 ## `forbidden`
 
-**403** — You are a member of the workspace, but your role does not allow the action (see the [permission matrix](DESIGN.md#21-permission-matrix)). Callers outside the workspace get [`not-found`](#not-found) instead.
+**403** — You are a member of the workspace, but your role does not allow the action (see the [permission matrix](DESIGN.md#21-permission-matrix)). Callers outside the workspace get [`not-found`](#not-found) instead. Also returned by refresh and logout for cross-site requests (`Sec-Fetch-Site: cross-site`, or an `Origin` that is neither the API's nor in `CORS_ORIGINS`).
 
 ## `not-found`
 

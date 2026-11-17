@@ -30,6 +30,7 @@ describe('OpenAPI document', () => {
       '/health/live',
       '/health/ready',
       '/v1/auth/login',
+      '/v1/auth/refresh',
       '/v1/auth/register',
       '/v1/workspaces',
       '/v1/workspaces/{wsId}',
@@ -45,6 +46,7 @@ describe('OpenAPI document', () => {
     );
     expect(document.components.securitySchemes).toEqual({
       bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+      refreshCookie: { type: 'apiKey', in: 'cookie', name: '__Secure-refresh' },
     });
     expect(document.security).toEqual([{ bearerAuth: [] }]);
     expect(document.paths['/health/live']?.get?.security).toEqual([]);

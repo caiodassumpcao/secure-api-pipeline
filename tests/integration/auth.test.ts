@@ -306,3 +306,156 @@ describe('POST /v1/auth/login', () => {
     expect(rows[0]?.password_hash).toMatch(/^\$argon2id\$v=19\$m=19456,t=2,p=1\$/);
   });
 });
+
+function refresh(refreshToken: string | undefined, headers: Record<string, string> = {}) {
+  return api.app.inject({
+    method: 'POST',
+    url: '/v1/auth/refresh',
+    headers: {
+      ...headers,
+      ...(refreshToken === undefined ? {} : { cookie: `${REFRESH}=${refreshToken}` }),
+    },
+  });
+}
+
+/** Logs a new account in and returns its refresh token. */
+async function session(): Promise<{ account: Account; refreshToken: string }> {
+  const account = await register();
+  const response = await login(account.email, PASSWORD);
+  expectStatus(response, 200);
+  const refreshToken = cookie(response, REFRESH)?.value;
+  if (refreshToken === undefined) throw new Error('no refresh cookie');
+  return { account, refreshToken };
+}
+
+async function familyOf(refreshToken: string) {
+  const { rows } = await api.testDatabase.database.pool.query<{
+    revoked_reason: string | null;
+  }>(
+    `SELECT f.revoked_reason FROM refresh_tokens t
+       JOIN refresh_token_families f ON f.id = t.family_id
+      WHERE t.token_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`,
+    [refreshToken],
+  );
+  return rows[0];
+}
+
+/** Makes a rotation look older than the reuse grace period. */
+async function ageRotation(refreshToken: string) {
+  await api.testDatabase.database.pool.query(
+    `UPDATE refresh_tokens SET rotated_at = now() - interval '1 hour'
+      WHERE token_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`,
+    [refreshToken],
+  );
+}
+
+describe('POST /v1/auth/refresh', () => {
+  it('exchanges the cookie for a new access token and a new refresh token', async () => {
+    const { refreshToken } = await session();
+
+    const response = await refresh(refreshToken);
+
+    expectStatus(response, 200);
+    const next = cookie(response, REFRESH);
+    expect(next?.value).toMatch(/^[\w-]{43}$/);
+    expect(next?.value).not.toBe(refreshToken);
+    expect(next).toMatchObject({
+      path: '/v1/auth',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Strict',
+    });
+    const { accessToken } = response.json<{ accessToken: string }>();
+    const me = await api.app.inject({
+      method: 'GET',
+      url: '/v1/workspaces',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(me.statusCode).toBe(200);
+  });
+
+  it('revokes the whole session when an exchanged token is presented again', async () => {
+    const { refreshToken } = await session();
+    const next = cookie(await refresh(refreshToken), REFRESH)?.value;
+    await ageRotation(refreshToken);
+
+    const reuse = await refresh(refreshToken);
+
+    expect(reuse.statusCode).toBe(401);
+    expect(cookie(reuse, REFRESH)).toMatchObject({ value: '' });
+    expect(await familyOf(refreshToken)).toEqual({ revoked_reason: 'reuse' });
+    // The legitimate holder of the newer token is logged out too.
+    expect((await refresh(next)).statusCode).toBe(401);
+  });
+
+  it('does not treat two tabs refreshing at once as reuse', async () => {
+    const { refreshToken } = await session();
+
+    const results = await Promise.all([refresh(refreshToken), refresh(refreshToken)]);
+
+    expect(results.map((response) => response.statusCode).sort()).toEqual([200, 401]);
+    const loser = results.find((response) => response.statusCode === 401);
+    expect(loser?.cookies).toEqual([]); // keeps the newer cookie the winner set
+    expect(await familyOf(refreshToken)).toEqual({ revoked_reason: null });
+    const winner = results.find((response) => response.statusCode === 200);
+    expectStatus(await refresh(winner && cookie(winner, REFRESH)?.value), 200);
+  });
+
+  it('rejects an idle token and a session past its absolute lifetime', async () => {
+    const idle = await session();
+    await api.testDatabase.database.pool.query(
+      `UPDATE refresh_tokens SET expires_at = now() - interval '1 hour'
+        WHERE token_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')`,
+      [idle.refreshToken],
+    );
+    const ended = await session();
+    await api.testDatabase.database.pool.query(
+      `UPDATE refresh_token_families SET expires_at = now() - interval '1 hour'
+        WHERE user_id = $1`,
+      [ended.account.id],
+    );
+
+    for (const response of [await refresh(idle.refreshToken), await refresh(ended.refreshToken)]) {
+      expect(response.statusCode).toBe(401);
+      expect(cookie(response, REFRESH)).toMatchObject({ value: '' });
+    }
+  });
+
+  it('never extends a token past the end of the session', async () => {
+    const { account, refreshToken } = await session();
+    await api.testDatabase.database.pool.query(
+      `UPDATE refresh_token_families SET expires_at = now() + interval '1 hour' WHERE user_id = $1`,
+      [account.id],
+    );
+
+    const response = await refresh(refreshToken);
+
+    expectStatus(response, 200);
+    expect(cookie(response, REFRESH)?.maxAge).toBeGreaterThan(3_500);
+    expect(cookie(response, REFRESH)?.maxAge).toBeLessThanOrEqual(3_600);
+  });
+
+  it.each([
+    ['no cookie', undefined],
+    ['a malformed cookie', 'not-a-token'],
+    ['an unknown token', 'x'.repeat(43)],
+  ])('answers 401 to %s', async (_case, token) => {
+    const response = await refresh(token);
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers['www-authenticate']).toBe('Bearer realm="secure-api"');
+  });
+
+  it('refuses cross-site requests, before touching the token', async () => {
+    const { refreshToken } = await session();
+
+    const forged = [
+      await refresh(refreshToken, { origin: 'https://evil.example' }),
+      await refresh(refreshToken, { 'sec-fetch-site': 'cross-site' }),
+      await refresh(refreshToken, { origin: 'null' }),
+    ];
+
+    expect(forged.map((response) => response.statusCode)).toEqual([403, 403, 403]);
+    expectStatus(await refresh(refreshToken, { origin: 'http://localhost:80' }), 200);
+  });
+});

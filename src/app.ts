@@ -85,6 +85,7 @@ export async function buildApp({ logger, database, auth, docs, http }: AppDepend
   await app.register(authRoutes, {
     prefix: '/v1/auth',
     service: createAuthService({ db: database.db, ...auth }),
+    allowedOrigins: http.corsOrigins,
   });
 
   await app.register(

@@ -3,7 +3,12 @@ import type { Executor } from '../../db/database.ts';
 import { refreshTokenFamilies, refreshTokens, trustedDevices, users } from '../../db/schema.ts';
 import { uuidv7 } from '../../lib/ids.ts';
 import { generateOpaqueToken, hashOpaqueToken } from '../../lib/opaque-token.ts';
-import { DEVICE_FAILURE_LIMIT, LOCKOUT_DURATION_MS, LOCKOUT_THRESHOLD } from './policy.ts';
+import {
+  DEVICE_FAILURE_LIMIT,
+  LOCKOUT_DURATION_MS,
+  LOCKOUT_THRESHOLD,
+  REFRESH_REUSE_GRACE_MS,
+} from './policy.ts';
 
 export interface UserRow {
   readonly id: string;
@@ -17,6 +22,20 @@ export interface Credentials {
   readonly passwordHash: string;
   /** Locked against clients without a device cookie, per the database clock. */
   readonly locked: boolean;
+}
+
+export interface StoredRefreshToken {
+  readonly id: string;
+  readonly familyId: string;
+  readonly userId: string;
+  /** Already exchanged for a newer token. */
+  readonly rotated: boolean;
+  /** Exchanged so recently that presenting it again is a race, not an attack. */
+  readonly rotatedWithinGrace: boolean;
+  /** Unused for longer than its idle lifetime. */
+  readonly expired: boolean;
+  /** The session was revoked or reached its absolute lifetime. */
+  readonly sessionEnded: boolean;
 }
 
 const userColumns = {
@@ -145,6 +164,63 @@ export function createAuthRepository(db: Executor) {
         .where(eq(trustedDevices.id, deviceId))
         .returning({ revokedAt: trustedDevices.revokedAt });
       return { revoked: row?.revokedAt !== null && row?.revokedAt !== undefined };
+    },
+
+    /**
+     * The refresh token behind a cookie, row-locked until the transaction
+     * ends, so two concurrent refreshes with it are serialized.
+     */
+    async findRefreshTokenForUpdate(token: string): Promise<StoredRefreshToken | undefined> {
+      const [row] = await db
+        .select({
+          id: refreshTokens.id,
+          familyId: refreshTokens.familyId,
+          userId: refreshTokenFamilies.userId,
+          rotated: sql<boolean>`${refreshTokens.replacedBy} IS NOT NULL`,
+          rotatedWithinGrace: sql<boolean>`coalesce(${refreshTokens.rotatedAt} > ${nowPlus(-REFRESH_REUSE_GRACE_MS)}, false)`,
+          expired: sql<boolean>`${refreshTokens.expiresAt} <= now()`,
+          sessionEnded: sql<boolean>`${refreshTokenFamilies.revokedAt} IS NOT NULL OR ${refreshTokenFamilies.expiresAt} <= now()`,
+        })
+        .from(refreshTokens)
+        .innerJoin(refreshTokenFamilies, eq(refreshTokenFamilies.id, refreshTokens.familyId))
+        .where(eq(refreshTokens.tokenHash, hashOpaqueToken(token)))
+        .for('update', { of: refreshTokens });
+      return row;
+    },
+
+    /**
+     * Exchanges a refresh token for a new one in the same family, valid for the
+     * idle lifetime but never past the end of the session.
+     */
+    async rotateRefreshToken(
+      current: { id: string; familyId: string },
+      tokenMs: number,
+    ): Promise<{ token: string; expiresAt: Date }> {
+      const token = generateOpaqueToken();
+      const id = uuidv7();
+      const [row] = await db
+        .insert(refreshTokens)
+        .values({
+          id,
+          familyId: current.familyId,
+          tokenHash: hashOpaqueToken(token),
+          expiresAt: sql`least(${nowPlus(tokenMs)}, (SELECT ${refreshTokenFamilies.expiresAt} FROM ${refreshTokenFamilies} WHERE ${refreshTokenFamilies.id} = ${current.familyId}))`,
+        })
+        .returning({ expiresAt: refreshTokens.expiresAt });
+      await db
+        .update(refreshTokens)
+        .set({ replacedBy: id, rotatedAt: sql`now()` })
+        .where(eq(refreshTokens.id, current.id));
+      if (row === undefined) throw new Error('INSERT ... RETURNING returned no row');
+      return { token, expiresAt: row.expiresAt };
+    },
+
+    /** Ends a session: every token of the family stops working. */
+    async revokeFamily(familyId: string, reason: 'logout' | 'reuse'): Promise<void> {
+      await db
+        .update(refreshTokenFamilies)
+        .set({ revokedAt: sql`now()`, revokedReason: reason })
+        .where(and(eq(refreshTokenFamilies.id, familyId), isNull(refreshTokenFamilies.revokedAt)));
     },
 
     /** Starts a session: a token family with an absolute lifetime and its first refresh token. */

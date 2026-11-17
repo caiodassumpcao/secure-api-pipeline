@@ -5,11 +5,14 @@ import { idSchema, problemResponses, timestampSchema } from '../../lib/schemas.t
 import { INVALID_CREDENTIALS, type AuthService } from './auth.service.ts';
 import {
   clearDeviceCookie,
+  clearRefreshCookie,
   DEVICE_COOKIE,
   readTokenCookie,
+  REFRESH_COOKIE,
   setDeviceCookie,
   setRefreshCookie,
 } from './cookies.ts';
+import { assertNotCrossSite } from './csrf.ts';
 import { DEVICE_TTL_MS, REFRESH_TOKEN_TTL_MS } from './policy.ts';
 
 export const emailSchema = z.string().trim().toLowerCase().pipe(z.email().max(254));
@@ -44,10 +47,18 @@ const CHALLENGE = 'Bearer realm="secure-api"';
 
 export interface AuthRoutesOptions {
   readonly service: AuthService;
+  /** Browser origins allowed to use the refresh cookie, besides the API's own. */
+  readonly allowedOrigins: readonly string[];
 }
 
+const refreshCookieSecurity = [{ refreshCookie: [] }];
+
 /** Public routes under `/v1/auth`: no access token needed. */
-export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (app, { service }, done) => {
+export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
+  app,
+  { service, allowedOrigins },
+  done,
+) => {
   app.post(
     '/register',
     {
@@ -99,6 +110,35 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (app, { s
         setDeviceCookie(reply, result.deviceToken, DEVICE_TTL_MS);
       }
       setRefreshCookie(reply, result.refreshToken, REFRESH_TOKEN_TTL_MS);
+      return {
+        accessToken: result.accessToken,
+        tokenType: 'Bearer' as const,
+        expiresIn: result.expiresIn,
+      };
+    },
+  );
+
+  app.post(
+    '/refresh',
+    {
+      schema: {
+        tags,
+        summary: 'Exchange the refresh-token cookie for a new access token and a new cookie',
+        description:
+          'Each refresh token works once. Presenting one that was already exchanged ends the whole session (reuse detection), unless it was exchanged in the last seconds.',
+        security: refreshCookieSecurity,
+        response: { 200: accessTokenSchema, ...problemResponses(401, 403) },
+      },
+    },
+    async (request, reply) => {
+      assertNotCrossSite(request, allowedOrigins);
+      const result = await service.refresh(readTokenCookie(request, REFRESH_COOKIE));
+      if (result.status !== 'rotated') {
+        if (result.status === 'reuse_detected' || result.clearCookie) clearRefreshCookie(reply);
+        reply.header('www-authenticate', CHALLENGE);
+        throw new HttpProblem(ProblemTypes.unauthorized, 'The session has ended; log in again.');
+      }
+      setRefreshCookie(reply, result.refreshToken, result.refreshExpiresAt.getTime() - Date.now());
       return {
         accessToken: result.accessToken,
         tokenType: 'Bearer' as const,
