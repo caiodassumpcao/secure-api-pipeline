@@ -15,7 +15,7 @@
 </p>
 
 > [!NOTE]
-> **Built in public, phase by phase.** The foundation is in place: tooling, configuration, health checks, container and CI. Highlights and Architecture describe the v1.0 target; sections marked with a version describe what that release delivers — see the [roadmap](#roadmap).
+> **Built in public, phase by phase.** v0.1 delivers the domain: workspaces, members, projects and tasks with tenant isolation, database migrations and OpenAPI docs, on top of the tooling, container and CI foundation. Highlights and Architecture describe the v1.0 target; sections marked with a version describe what that release delivers — see the [roadmap](#roadmap).
 
 ---
 
@@ -90,11 +90,12 @@ Requirements: Docker + Compose v2. For development without Docker: Node 24 and p
 git clone https://github.com/caiodassumpcao/secure-api-pipeline.git
 cd secure-api-pipeline
 cp .env.example .env                 # local development values
-docker compose up -d --build --wait  # api + postgres, ports bound to 127.0.0.1
-curl localhost:3000/health/ready     # {"status":"ok","checks":{"database":"ok"}}
+docker compose up -d --build --wait  # postgres, one-shot migrate, api; ports bound to 127.0.0.1
+curl localhost:3000/health/ready     # {"status":"ok","checks":{"database":"ok","migrations":"ok"}}
+open http://localhost:3000/docs      # OpenAPI UI (document at /openapi.json)
 ```
 
-From v0.1 the stack also runs database migrations and serves the OpenAPI UI at `http://localhost:3000/docs`; from v0.2, `pnpm keys:generate` creates the development Ed25519 key pair.
+The `migrate` service applies the SQL migrations and exits; the API starts only if it succeeded, and `/health/ready` stays 503 until the database has the schema the build expects. Until v0.2 adds authentication, `/v1` routes answer 401 outside the test environment; from v0.2, `pnpm keys:generate` creates the development Ed25519 key pair.
 
 With local observability (Grafana, Prometheus, Tempo, Loki) — _v0.3_:
 
@@ -120,31 +121,35 @@ curl -s localhost:3000/v1/me -H "authorization: Bearer $TOKEN"
 
 ## API overview
 
-Health endpoints are available today; the resource endpoints arrive in v0.1 and v0.2.
+Workspace, member, project and task endpoints are available since v0.1 (identity comes from a test-only stub until v0.2); auth, `/v1/me` and the audit log arrive in v0.2. The full reference is the OpenAPI document served at `/docs`.
 
 | Resource   | Endpoints                                                                               |
 | ---------- | --------------------------------------------------------------------------------------- |
-| Auth       | `POST /v1/auth/register` · `login` · `refresh` · `logout`                               |
-| Me         | `GET /v1/me`                                                                            |
+| Auth       | `POST /v1/auth/register` · `login` · `refresh` · `logout` _(v0.2)_                      |
+| Me         | `GET /v1/me` _(v0.2)_                                                                   |
 | Workspaces | `/v1/workspaces[/:wsId]`                                                                |
 | Members    | `/v1/workspaces/:wsId/members[/:userId]`                                                |
-| Projects   | `/v1/workspaces/:wsId/projects[/:projectId]`                                            |
+| Projects   | `/v1/workspaces/:wsId/projects[/:projectId]` (`DELETE` archives)                        |
 | Tasks      | `/v1/workspaces/:wsId/projects/:projectId/tasks` · `/v1/workspaces/:wsId/tasks/:taskId` |
-| Audit      | `GET /v1/workspaces/:wsId/audit-events`                                                 |
+| Audit      | `GET /v1/workspaces/:wsId/audit-events` _(v0.2)_                                        |
 | Health     | `/health/live` · `/health/ready`                                                        |
 
-Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details and always include a `traceId` — see the [problem types](docs/problems.md).
+Lists use cursor pagination (`?limit=` 1–100 and the opaque `nextCursor`); task lists filter by `status`, `priority` and `assigneeId`. Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details and always include a `traceId` — see the [problem types](docs/problems.md).
 
 ### Roles
 
-| Action                | owner | admin | member | viewer |
-| --------------------- | :---: | :---: | :----: | :----: |
-| Read projects & tasks |  ✅   |  ✅   |   ✅   |   ✅   |
-| Create / update tasks |  ✅   |  ✅   |   ✅   |   —    |
-| Manage projects       |  ✅   |  ✅   |   —    |   —    |
-| Manage members        |  ✅   |  ✅   |   —    |   —    |
-| Read audit log        |  ✅   |  ✅   |   —    |   —    |
-| Delete workspace      |  ✅   |   —   |   —    |   —    |
+| Action                               | owner |      admin      |  member  | viewer |
+| ------------------------------------ | :---: | :-------------: | :------: | :----: |
+| Read workspace, members              |  ✅   |       ✅        |    ✅    |   ✅   |
+| Read projects & tasks                |  ✅   |       ✅        |    ✅    |   ✅   |
+| Create / update tasks                |  ✅   |       ✅        |    ✅    |   —    |
+| Delete tasks                         |  ✅   |       ✅        | own only |   —    |
+| Manage projects, edit workspace      |  ✅   |       ✅        |    —     |   —    |
+| Manage members                       |  ✅   | ✅ (not owners) |    —     |   —    |
+| Read audit log _(v0.2)_              |  ✅   |       ✅        |    —     |   —    |
+| Delete workspace, transfer ownership |  ✅   |        —        |    —     |   —    |
+
+Callers outside a workspace get 404 for everything in it, as if it did not exist. Every role × action available today is tested over HTTP ([ADR-0005](docs/adr/0005-tenant-isolation-at-repository-layer.md)).
 
 ## Verify a release image
 
@@ -164,7 +169,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 
 - Reporting a vulnerability: [`SECURITY.md`](SECURITY.md)
 - Security design and controls: [`docs/DESIGN.md` §5](docs/DESIGN.md#5-security-design)
-- Threat model: `docs/threat-model.md` _(v0.2)_
+- Threat model: [`docs/threat-model.md`](docs/threat-model.md) — residual risks today, full STRIDE model in v0.2
 - Security pipeline: `docs/security-pipeline.md` _(v0.4)_
 
 ## Part of a platform
@@ -179,8 +184,8 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 ## Roadmap
 
 - [x] Foundation — tooling, config, health, CI
-- [ ] **v0.1** — Domain, data model, CRUD, OpenAPI
-- [ ] **v0.2** — Authentication, authorization, tenant isolation, audit log, threat model
+- [x] **v0.1** — Domain, data model, CRUD, tenant isolation, OpenAPI
+- [ ] **v0.2** — Authentication, rate limits, audit log, threat model
 - [ ] **v0.3** — OpenTelemetry traces, metrics and correlated logs
 - [ ] **v0.4** — DevSecOps pipeline: scanners, SBOM, signing, provenance, DAST
 - [ ] **v1.0** — Verified deploys with automatic rollback
@@ -190,6 +195,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 - [Design specification](docs/DESIGN.md)
 - [Architecture decision records](docs/adr/)
 - [Problem types](docs/problems.md)
+- [Threat model](docs/threat-model.md)
 - [Contributing](CONTRIBUTING.md)
 - Runbook — `docs/runbook.md` _(v1.0)_
 
@@ -199,11 +205,16 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 corepack enable && pnpm install   # also installs the git hooks
 cp .env.example .env
 docker compose up -d postgres     # database for local development
-pnpm dev                          # watch mode, http://localhost:3000
-pnpm test                         # unit tests (pnpm test:coverage for the 85 % gate)
+pnpm db:migrate                   # apply the SQL migrations to DATABASE_URL
+pnpm dev                          # watch mode, http://localhost:3000 (docs at /docs)
 pnpm lint && pnpm typecheck
+pnpm test                         # unit tests, no Docker needed
+pnpm test:integration             # integration and security suites (PostgreSQL via Testcontainers)
+pnpm test:coverage                # every suite, with the 85 % coverage gate
 pnpm build                        # compile to dist/
 ```
+
+Schema changes: edit `src/db/schema.ts`, run `pnpm db:generate` to write the SQL migration to `drizzle/`, then review and commit it ([ADR-0002](docs/adr/0002-drizzle-orm-with-reviewed-sql-migrations.md)).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
