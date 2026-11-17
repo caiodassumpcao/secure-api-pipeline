@@ -183,6 +183,12 @@ const CASES: Case[] = [
     success: 204,
     run: (f, a) => as(a).delete(`${ws(f)}/tasks/${f.taskId}`),
   },
+  {
+    name: 'read the audit log',
+    action: 'audit:read',
+    success: 200,
+    run: (f, a) => as(a).get(`${ws(f)}/audit-events`),
+  },
 ];
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'] as const satisfies readonly Role[];
@@ -228,7 +234,6 @@ describe('authorization matrix', () => {
       ...CASES.map((testCase) => testCase.action),
       'task:delete-own',
     ]);
-    // Read audit log: endpoint arrives with the audit trail (Phase 2).
-    expect(new Set(Object.keys(PERMISSIONS))).toEqual(new Set([...tested, 'audit:read']));
+    expect(new Set(Object.keys(PERMISSIONS))).toEqual(tested);
   });
 });

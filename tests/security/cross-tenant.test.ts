@@ -70,6 +70,7 @@ describe('another tenant’s workspace', () => {
     ['GET', () => `${ws()}/tasks/${target.taskId}`],
     ['PATCH', () => `${ws()}/tasks/${target.taskId}`, { title: 'Pwned' }],
     ['DELETE', () => `${ws()}/tasks/${target.taskId}`],
+    ['GET', () => `${ws()}/audit-events`],
   ];
 
   it.each(requests)('%s %s → 404', async (method, url, body) => {

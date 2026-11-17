@@ -36,6 +36,7 @@ describe('OpenAPI document', () => {
       '/v1/me',
       '/v1/workspaces',
       '/v1/workspaces/{wsId}',
+      '/v1/workspaces/{wsId}/audit-events',
       '/v1/workspaces/{wsId}/members',
       '/v1/workspaces/{wsId}/members/{userId}',
       '/v1/workspaces/{wsId}/projects',

@@ -213,3 +213,47 @@ describe('retention', () => {
     expect(rows.map((row) => row.id)).toEqual([recent]);
   });
 });
+
+describe('GET /v1/workspaces/:wsId/audit-events', () => {
+  it('lists the workspace trail newest first, paginated, filterable by action', async () => {
+    const team = await api.createTeam();
+    const url = `/v1/workspaces/${team.workspaceId}/audit-events`;
+    await api
+      .as(team.owner)
+      .patch(`/v1/workspaces/${team.workspaceId}/members/${team.viewer.id}`, { role: 'member' });
+
+    const first = await api.as(team.admin).get(`${url}?limit=2`);
+    expectStatus(first, 200);
+    const page = first.json<{ data: { action: string; actorId: string }[]; nextCursor: string }>();
+    expect(page.data.map((event) => event.action)).toEqual(['member.role_changed', 'member.added']);
+    expect(page.data[0]).toEqual({
+      id: expect.any(String),
+      action: 'member.role_changed',
+      actorId: team.owner.id,
+      target: `user:${team.viewer.id}`,
+      ip: '127.0.0.1',
+      userAgent: 'lightMyRequest',
+      metadata: { from: 'viewer', to: 'member' },
+      createdAt: expect.any(String),
+    });
+
+    const rest = await api.as(team.admin).get(`${url}?cursor=${page.nextCursor}`);
+    expect(rest.json<{ data: unknown[]; nextCursor: null }>()).toEqual({
+      data: [expect.objectContaining({ action: 'member.added' }), expect.anything()],
+      nextCursor: null,
+    });
+
+    const filtered = await api.as(team.owner).get(`${url}?action=member.role_changed`);
+    expect(filtered.json<{ data: unknown[] }>().data).toHaveLength(1);
+  });
+
+  it('rejects an unknown action filter', async () => {
+    const team = await api.createTeam();
+
+    const response = await api
+      .as(team.owner)
+      .get(`/v1/workspaces/${team.workspaceId}/audit-events?action=everything`);
+
+    expect(response.statusCode).toBe(400);
+  });
+});

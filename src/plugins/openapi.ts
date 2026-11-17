@@ -42,6 +42,7 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
         { name: 'members', description: 'Workspace memberships and roles' },
         { name: 'projects' },
         { name: 'tasks' },
+        { name: 'audit', description: 'Append-only trail of security-relevant actions' },
         { name: 'health', description: 'Probes for orchestrators and deploys' },
       ],
     },

@@ -17,6 +17,8 @@ import { taskRoutes } from './modules/tasks/tasks.routes.ts';
 import { createTasksService } from './modules/tasks/tasks.service.ts';
 import { workspaceRoutes } from './modules/workspaces/workspaces.routes.ts';
 import { createWorkspacesService } from './modules/workspaces/workspaces.service.ts';
+import { auditRoutes } from './modules/audit/audit.routes.ts';
+import { createAuditService } from './modules/audit/audit.service.ts';
 import { authRoutes, meRoutes } from './modules/auth/auth.routes.ts';
 import { createAuthService } from './modules/auth/auth.service.ts';
 import type { PasswordHasher } from './modules/auth/password.ts';
@@ -107,6 +109,7 @@ export async function buildApp({ logger, database, auth, docs, limits, http }: A
       await v1.register(memberRoutes, { service: createMembersService(database.db) });
       await v1.register(projectRoutes, { service: createProjectsService(database.db) });
       await v1.register(taskRoutes, { service: createTasksService(database.db) });
+      await v1.register(auditRoutes, { service: createAuditService(database.db) });
     },
     { prefix: '/v1' },
   );
