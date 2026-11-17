@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from './helpers/database.ts';
-import { OtlpReceiver, type ReceivedSpan } from './helpers/otlp-receiver.ts';
+import { exportingTo, OtlpReceiver, type ReceivedSpan } from './helpers/otlp-receiver.ts';
 import { runApiProcessToExit, startApiProcess, type ApiProcess } from './helpers/process.ts';
 
 /**
@@ -52,17 +52,6 @@ describe('telemetry preload', () => {
     expect(output).not.toContain('everything-please');
   });
 });
-
-/** Env for a process that exports everything, quickly, to `receiver`. */
-export function exportingTo(receiver: OtlpReceiver): Record<string, string> {
-  return {
-    OTEL_EXPORTER_OTLP_ENDPOINT: receiver.url,
-    OTEL_TRACES_SAMPLER_ARG: '1',
-    OTEL_BSP_SCHEDULE_DELAY: '100',
-    OTEL_BLRP_SCHEDULE_DELAY: '100',
-    OTEL_METRIC_EXPORT_INTERVAL: '500',
-  };
-}
 
 const PASSWORD = 'telemetry passphrase for tests';
 

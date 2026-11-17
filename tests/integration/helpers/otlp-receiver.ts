@@ -52,6 +52,17 @@ function toRecord(attributes: KeyValue[] | undefined): Record<string, unknown> {
   return Object.fromEntries((attributes ?? []).map(({ key, value }) => [key, scalar(value)]));
 }
 
+/** Env for an API process that exports everything, quickly, to `receiver`. */
+export function exportingTo(receiver: OtlpReceiver): Record<string, string> {
+  return {
+    OTEL_EXPORTER_OTLP_ENDPOINT: receiver.url,
+    OTEL_TRACES_SAMPLER_ARG: '1',
+    OTEL_BSP_SCHEDULE_DELAY: '100',
+    OTEL_BLRP_SCHEDULE_DELAY: '100',
+    OTEL_METRIC_EXPORT_INTERVAL: '500',
+  };
+}
+
 /** Collects what an OTLP/HTTP JSON exporter sends, for assertions. */
 export class OtlpReceiver {
   readonly url: string;
