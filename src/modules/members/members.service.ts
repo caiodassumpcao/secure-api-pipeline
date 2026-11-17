@@ -63,38 +63,6 @@ export function createMembersService(db: Db) {
       return toMember(await findOrThrow(db, workspaceId, userId));
     },
 
-    async add(
-      actorId: string,
-      workspaceId: string,
-      input: { email: string; role: Role },
-      context: RequestContext,
-    ): Promise<Member> {
-      const actorRole = await authorize(db, workspaceId, actorId, 'member:manage');
-      assertCanManage(actorRole, input.role);
-
-      const userId = await repository.findUserIdByEmail(input.email);
-      if (userId === undefined) {
-        throw new HttpProblem(ProblemTypes.notFound, 'No account uses this email address.');
-      }
-      return db.transaction(async (tx) => {
-        if (!(await createMembersRepository(tx).insert(workspaceId, userId, input.role))) {
-          throw new HttpProblem(ProblemTypes.conflict, 'This user is already a member.');
-        }
-        await recordAuditEvent(
-          tx,
-          {
-            action: 'member.added',
-            actorId,
-            workspaceId,
-            target: `user:${userId}`,
-            metadata: { role: input.role },
-          },
-          context,
-        );
-        return toMember(await findOrThrow(tx, workspaceId, userId));
-      });
-    },
-
     async changeRole(
       actorId: string,
       workspaceId: string,

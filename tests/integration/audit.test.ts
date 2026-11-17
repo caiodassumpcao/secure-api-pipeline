@@ -157,14 +157,34 @@ describe('workspace events', () => {
     expect((await owner.delete(`${members}/${team.owner.id}`)).statusCode).toBe(409);
 
     const recorded = await events({ workspaceId: team.workspaceId });
-    expect(recorded.map((event) => [event.action, event.target, event.metadata])).toEqual([
-      ['member.added', `user:${team.admin.id}`, { role: 'admin' }],
-      ['member.added', `user:${team.member.id}`, { role: 'member' }],
-      ['member.added', `user:${team.viewer.id}`, { role: 'viewer' }],
-      ['member.role_changed', `user:${team.viewer.id}`, { from: 'viewer', to: 'member' }],
-      ['member.removed', `user:${team.viewer.id}`, { role: 'member' }],
+    const joined = (user: { id: string }, role: string) => [
+      [
+        'member.invited',
+        team.owner.id,
+        expect.stringMatching(/^invitation:/),
+        { role, restrictedToEmail: true },
+      ],
+      [
+        'member.added',
+        user.id,
+        `user:${user.id}`,
+        { role, invitationId: expect.any(String), invitedBy: team.owner.id },
+      ],
+    ];
+    expect(
+      recorded.map((event) => [event.action, event.actor_id, event.target, event.metadata]),
+    ).toEqual([
+      ...joined(team.admin, 'admin'),
+      ...joined(team.member, 'member'),
+      ...joined(team.viewer, 'viewer'),
+      [
+        'member.role_changed',
+        team.owner.id,
+        `user:${team.viewer.id}`,
+        { from: 'viewer', to: 'member' },
+      ],
+      ['member.removed', team.owner.id, `user:${team.viewer.id}`, { role: 'member' }],
     ]);
-    expect(recorded.every((event) => event.actor_id === team.owner.id)).toBe(true);
   });
 
   it('records an archive once, and a deletion that outlives the workspace', async () => {
@@ -238,10 +258,8 @@ describe('GET /v1/workspaces/:wsId/audit-events', () => {
     });
 
     const rest = await api.as(team.admin).get(`${url}?cursor=${page.nextCursor}`);
-    expect(rest.json<{ data: unknown[]; nextCursor: null }>()).toEqual({
-      data: [expect.objectContaining({ action: 'member.added' }), expect.anything()],
-      nextCursor: null,
-    });
+    // The 3 invitations of createTeam and the 2 earlier acceptances.
+    expect(rest.json<{ data: unknown[] }>().data).toHaveLength(5);
 
     const filtered = await api.as(team.owner).get(`${url}?action=member.role_changed`);
     expect(filtered.json<{ data: unknown[] }>().data).toHaveLength(1);

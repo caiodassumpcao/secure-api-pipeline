@@ -4,6 +4,7 @@ import type { Db, Executor } from '../db/database.ts';
 import {
   AUDIT_RETENTION_DAYS,
   auditEvents,
+  invitations,
   rateLimits,
   refreshTokenFamilies,
   trustedDevices,
@@ -27,7 +28,7 @@ export interface CleanupReport {
 /**
  * Deletes what has expired: rate-limit windows, sessions past their absolute
  * lifetime (revoked ones included), device cookies that expired or were
- * revoked, and audit events older than the retention period (the only deletes
+ * revoked, invitations past their expiry, and audit events older than the retention period (the only deletes
  * the audit trigger allows). Holds a transaction-level advisory lock, so
  * concurrent instances never do the work twice.
  */
@@ -52,6 +53,9 @@ export async function runCleanup(db: Db): Promise<CleanupReport> {
           .where(
             or(lte(trustedDevices.expiresAt, sql`now()`), isNotNull(trustedDevices.revokedAt)),
           ),
+      ),
+      invitations: count(
+        await tx.delete(invitations).where(lte(invitations.expiresAt, sql`now()`)),
       ),
       audit_events: await deleteExpiredAuditEvents(tx),
     };

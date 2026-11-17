@@ -126,12 +126,25 @@ export class TestApi {
     return response.json<{ id: string }>().id;
   }
 
-  async addMember(actor: TestUser, workspaceId: string, user: TestUser, role: Role): Promise<void> {
-    const response = await this.as(actor).post(`/v1/workspaces/${workspaceId}/members`, {
-      email: user.email,
+  /** Creates an invitation link and returns its token. */
+  async invite(
+    actor: TestUser,
+    workspaceId: string,
+    role: Role,
+    email?: string,
+  ): Promise<{ id: string; token: string }> {
+    const response = await this.as(actor).post(`/v1/workspaces/${workspaceId}/invitations`, {
       role,
+      ...(email === undefined ? {} : { email }),
     });
     expectStatus(response, 201);
+    return response.json<{ id: string; token: string }>();
+  }
+
+  /** The way members join a workspace: an invitation, accepted by the invitee. */
+  async addMember(actor: TestUser, workspaceId: string, user: TestUser, role: Role): Promise<void> {
+    const { token } = await this.invite(actor, workspaceId, role, user.email);
+    expectStatus(await this.as(user).post('/v1/invitations/accept', { token }), 201);
   }
 
   /** A workspace with one user per role. */

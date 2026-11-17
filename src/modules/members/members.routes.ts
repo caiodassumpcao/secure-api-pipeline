@@ -51,31 +51,6 @@ export const memberRoutes: FastifyPluginCallbackZod<MemberRoutesOptions> = (
       }),
   );
 
-  app.post(
-    '/workspaces/:wsId/members',
-    {
-      schema: {
-        tags,
-        summary: 'Add an existing account as a member (owner, admin; only owners grant owner)',
-        params: workspaceParams,
-        body: z.object({ email: z.email().max(254).toLowerCase(), role: roleSchema }).strict(),
-        response: { 201: memberSchema, ...problemResponses(400, 401, 403, 404, 409) },
-      },
-    },
-    async (request, reply) => {
-      const member = await service.add(
-        currentUser(request).id,
-        request.params.wsId,
-        request.body,
-        requestContext(request),
-      );
-      return reply
-        .code(201)
-        .header('location', `/v1/workspaces/${request.params.wsId}/members/${member.userId}`)
-        .send(member);
-    },
-  );
-
   app.get(
     '/workspaces/:wsId/members/:userId',
     {

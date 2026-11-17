@@ -2,6 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runCleanup } from '../../src/jobs/cleanup.ts';
 import { createRateLimiter } from '../../src/lib/rate-limiter.ts';
 import {
+  ACCEPT_PER_USER,
+  INVITE_PER_USER,
+} from '../../src/modules/invitations/invitations.routes.ts';
+import {
   LOGIN_PER_EMAIL,
   LOGIN_PER_IP,
   REFRESH_PER_IP,
@@ -208,5 +212,23 @@ describe('cleanup', () => {
       await other.query('ROLLBACK');
       other.release();
     }
+  });
+});
+
+describe('invitation limits', () => {
+  it('limit invitations created per user and acceptance attempts per user', async () => {
+    const team = await api.createTeam();
+    const url = `/v1/workspaces/${team.workspaceId}/invitations`;
+    for (let index = 0; index < INVITE_PER_USER.max - 3; index += 1) {
+      // createTeam already sent 3 invitations for this owner.
+      expectStatus(await api.as(team.owner).post(url, { role: 'viewer' }), 201);
+    }
+    expectLimited(await api.as(team.owner).post(url, { role: 'viewer' }));
+
+    const outsider = await api.createUser('Outsider');
+    for (let index = 0; index < ACCEPT_PER_USER.max; index += 1) {
+      await api.as(outsider).post('/v1/invitations/accept', { token: 'x'.repeat(43) });
+    }
+    expectLimited(await api.as(outsider).post('/v1/invitations/accept', { token: 'x'.repeat(43) }));
   });
 });

@@ -15,7 +15,7 @@ let victim: TestUser;
 let victimMember: TestUser;
 /** The attacker's own workspace, where they are owner. */
 let own: string;
-let target: { workspaceId: string; projectId: string; taskId: string };
+let target: { workspaceId: string; projectId: string; taskId: string; invitationId: string };
 
 beforeAll(async () => {
   api = await TestApi.start();
@@ -33,7 +33,8 @@ beforeAll(async () => {
     title: 'Secret plan',
     assigneeId: victimMember.id,
   });
-  target = { workspaceId, projectId, taskId };
+  const { id: invitationId } = await api.invite(victim, workspaceId, 'member');
+  target = { workspaceId, projectId, taskId, invitationId };
 });
 
 afterAll(async () => {
@@ -56,7 +57,9 @@ describe('another tenant’s workspace', () => {
     ['PATCH', ws, { name: 'Pwned' }],
     ['DELETE', ws],
     ['GET', () => `${ws()}/members`],
-    ['POST', () => `${ws()}/members`, { email: 'x@example.test', role: 'owner' }],
+    ['POST', () => `${ws()}/invitations`, { role: 'owner' }],
+    ['GET', () => `${ws()}/invitations`],
+    ['DELETE', () => `${ws()}/invitations/${target.invitationId}`],
     ['GET', () => `${ws()}/members/${victimMember.id}`],
     ['PATCH', () => `${ws()}/members/${victimMember.id}`, { role: 'owner' }],
     ['DELETE', () => `${ws()}/members/${victimMember.id}`],
@@ -99,6 +102,7 @@ describe('another tenant’s ids under the attacker’s own workspace', () => {
     ['GET', () => `${mine()}/members/${victimMember.id}`],
     ['PATCH', () => `${mine()}/members/${victimMember.id}`, { role: 'viewer' }],
     ['DELETE', () => `${mine()}/members/${victimMember.id}`],
+    ['DELETE', () => `${mine()}/invitations/${target.invitationId}`],
   ];
 
   it.each(requests)('%s %s → 404', async (method, url, body) => {

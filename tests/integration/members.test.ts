@@ -31,39 +31,6 @@ describe('workspace members', () => {
     );
   });
 
-  it('adds an existing account by email, case-insensitively', async () => {
-    const team = await api.createTeam();
-    const carol = await api.createUser('Carol');
-
-    const response = await api
-      .as(team.admin)
-      .post(members(team), { email: carol.email.toUpperCase(), role: 'member' });
-
-    expect(response.statusCode).toBe(201);
-    expect(response.json()).toEqual({
-      userId: carol.id,
-      email: carol.email,
-      name: 'Carol',
-      role: 'member',
-      joinedAt: expect.any(String),
-    });
-    expect(response.headers.location).toBe(`${members(team)}/${carol.id}`);
-  });
-
-  it('answers 404 for an email without an account and 409 for an existing member', async () => {
-    const team = await api.createTeam();
-
-    const unknown = await api
-      .as(team.owner)
-      .post(members(team), { email: 'nobody@example.test', role: 'member' });
-    expect(unknown.statusCode).toBe(404);
-
-    const duplicate = await api
-      .as(team.owner)
-      .post(members(team), { email: team.member.email, role: 'viewer' });
-    expect(duplicate.statusCode).toBe(409);
-  });
-
   it('changes roles', async () => {
     const team = await api.createTeam();
 
@@ -78,11 +45,10 @@ describe('workspace members', () => {
   describe('owners', () => {
     it('admins can neither grant, change nor remove the owner role', async () => {
       const team = await api.createTeam();
-      const dave = await api.createUser('Dave');
 
-      const grantOnAdd = await api
+      const grantOnInvite = await api
         .as(team.admin)
-        .post(members(team), { email: dave.email, role: 'owner' });
+        .post(`/v1/workspaces/${team.workspaceId}/invitations`, { role: 'owner' });
       const grantOnChange = await api
         .as(team.admin)
         .patch(`${members(team)}/${team.member.id}`, { role: 'owner' });
@@ -91,7 +57,7 @@ describe('workspace members', () => {
         .patch(`${members(team)}/${team.owner.id}`, { role: 'member' });
       const remove = await api.as(team.admin).delete(`${members(team)}/${team.owner.id}`);
 
-      expect([grantOnAdd, grantOnChange, demote, remove].map((r) => r.statusCode)).toEqual([
+      expect([grantOnInvite, grantOnChange, demote, remove].map((r) => r.statusCode)).toEqual([
         403, 403, 403, 403,
       ]);
     });
@@ -211,17 +177,5 @@ describe('workspace members', () => {
     const remove = await api.as(team.owner).delete(`${members(team)}/${stranger.id}`);
 
     expect([read.statusCode, change.statusCode, remove.statusCode]).toEqual([404, 404, 404]);
-  });
-
-  it.each([
-    [{ email: 'not-an-email', role: 'member' }, 'body.email'],
-    [{ email: 'a@example.test', role: 'superuser' }, 'body.role'],
-  ])('validates %o', async (payload, path) => {
-    const team = await api.createTeam();
-
-    const response = await api.as(team.owner).post(members(team), payload);
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json<{ errors: { path: string }[] }>().errors[0]?.path).toBe(path);
   });
 });
