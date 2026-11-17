@@ -5,8 +5,12 @@ import { buildTestApp } from '../../helpers/test-app.ts';
 interface OpenApiDocument {
   openapi: string;
   info: { version: string };
-  paths: Record<string, Record<string, { responses: Record<string, { content?: object }> }>>;
-  components: { schemas: Record<string, unknown> };
+  paths: Record<
+    string,
+    Record<string, { responses: Record<string, { content?: object }>; security?: unknown }>
+  >;
+  components: { schemas: Record<string, unknown>; securitySchemes?: unknown };
+  security?: unknown;
 }
 
 describe('OpenAPI document', () => {
@@ -37,6 +41,11 @@ describe('OpenAPI document', () => {
     expect(Object.keys(document.components.schemas)).toEqual(
       expect.arrayContaining(['Workspace', 'Member', 'Project', 'Task']),
     );
+    expect(document.components.securitySchemes).toEqual({
+      bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+    });
+    expect(document.security).toEqual([{ bearerAuth: [] }]);
+    expect(document.paths['/health/live']?.get?.security).toEqual([]);
   });
 
   it('documents errors as RFC 9457 problem details', async () => {

@@ -15,7 +15,8 @@ import { taskRoutes } from './modules/tasks/tasks.routes.ts';
 import { createTasksService } from './modules/tasks/tasks.service.ts';
 import { workspaceRoutes } from './modules/workspaces/workspaces.routes.ts';
 import { createWorkspacesService } from './modules/workspaces/workspaces.service.ts';
-import { registerAuthentication, type Authenticator } from './plugins/authentication.ts';
+import type { TokenService } from './modules/auth/tokens.ts';
+import { createBearerAuthenticator, registerAuthentication } from './plugins/authentication.ts';
 import { frameworkErrorHandler, registerErrorHandler } from './plugins/error-handler.ts';
 import { registerOpenApi } from './plugins/openapi.ts';
 import { generateRequestId, registerRequestIdHeader } from './plugins/request-id.ts';
@@ -30,8 +31,10 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 export interface AppDependencies {
   readonly logger: FastifyBaseLogger;
   readonly database: ReadinessProbe & { readonly db: Db };
-  /** Resolves the caller of `/v1` routes (test stub until Phase 2). */
-  readonly authenticate: Authenticator;
+  readonly auth: {
+    /** Issues and verifies the access tokens that authenticate `/v1` routes. */
+    readonly tokens: TokenService;
+  };
   /** Serve `/docs` and `/openapi.json` (off in production unless enabled). */
   readonly docs: { readonly enabled: boolean };
   readonly http: {
@@ -46,7 +49,7 @@ export interface AppDependencies {
  * Creates the Fastify instance with all plugins and routes, without listening.
  * Tests use it with `app.inject()`; `main.ts` adds the process lifecycle.
  */
-export async function buildApp({ logger, database, authenticate, docs, http }: AppDependencies) {
+export async function buildApp({ logger, database, auth, docs, http }: AppDependencies) {
   const app = Fastify({
     loggerInstance: logger,
     genReqId: generateRequestId,
@@ -74,7 +77,7 @@ export async function buildApp({ logger, database, authenticate, docs, http }: A
 
   await app.register(
     async (v1) => {
-      registerAuthentication(v1, authenticate);
+      registerAuthentication(v1, createBearerAuthenticator(auth.tokens));
       await v1.register(workspaceRoutes, { service: createWorkspacesService(database.db) });
       await v1.register(memberRoutes, { service: createMembersService(database.db) });
       await v1.register(projectRoutes, { service: createProjectsService(database.db) });

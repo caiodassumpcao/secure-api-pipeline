@@ -4,7 +4,8 @@ import type { Role } from '../../../src/db/schema.ts';
 import { users } from '../../../src/db/schema.ts';
 import { uuidv7 } from '../../../src/lib/ids.ts';
 import { createLogger } from '../../../src/lib/logger.ts';
-import { createTestAuthenticator, TEST_USER_HEADER } from '../../../src/plugins/authentication.ts';
+import type { TokenService } from '../../../src/modules/auth/tokens.ts';
+import { createTestTokenService } from '../../helpers/keys.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
 
 export interface TestUser {
@@ -31,28 +32,36 @@ export interface Team {
   readonly viewer: TestUser;
 }
 
-/** Real app + real PostgreSQL database (one per test file), identity via the test stub. */
+/**
+ * Real app + real PostgreSQL database (one per test file). Callers authenticate
+ * with real access tokens, issued directly by the token service: logging in
+ * would run argon2 for each of the hundreds of users the suites create.
+ */
 export class TestApi {
   readonly app: App;
   readonly testDatabase: TestDatabase;
+  readonly tokens: TokenService;
   private sequence = 0;
+  private readonly accessTokens = new Map<string, Promise<string>>();
 
-  private constructor(app: App, testDatabase: TestDatabase) {
+  private constructor(app: App, testDatabase: TestDatabase, tokens: TokenService) {
     this.app = app;
     this.testDatabase = testDatabase;
+    this.tokens = tokens;
   }
 
   static async start(): Promise<TestApi> {
     const testDatabase = await createTestDatabase();
+    const tokens = await createTestTokenService();
     const app = await buildApp({
       logger: createLogger({ level: 'silent' }),
       database: testDatabase.database,
-      authenticate: createTestAuthenticator('test'),
+      auth: { tokens },
       docs: { enabled: false },
       http: { corsOrigins: [], trustProxy: false },
     });
     await app.ready();
-    return new TestApi(app, testDatabase);
+    return new TestApi(app, testDatabase, tokens);
   }
 
   async stop(): Promise<void> {
@@ -64,20 +73,29 @@ export class TestApi {
     return this.testDatabase.database.db;
   }
 
-  /** Users exist outside workspaces; until Phase 2 adds registration they are seeded. */
+  /** Inserted directly: tests authenticate with issued tokens, not with the password. */
   async createUser(name = 'Test User'): Promise<TestUser> {
     const user = { id: uuidv7(), email: `user-${uuidv7()}@example.test`, name };
     await this.db.insert(users).values({ ...user, passwordHash: 'not-a-real-hash' });
     return user;
   }
 
+  /** A valid access token for the user, issued once per test file. */
+  accessToken(user: TestUser): Promise<string> {
+    const issued = this.accessTokens.get(user.id);
+    if (issued !== undefined) return issued;
+    const pending = this.tokens.issueAccessToken(user.id).then(({ accessToken }) => accessToken);
+    this.accessTokens.set(user.id, pending);
+    return pending;
+  }
+
   as(user: TestUser | null): ApiClient {
-    const request = (method: Method, url: string, payload?: object) =>
+    const request = async (method: Method, url: string, payload?: object) =>
       this.app.inject({
         method,
         url,
         ...(payload === undefined ? {} : { payload }),
-        headers: user === null ? {} : { [TEST_USER_HEADER]: user.id },
+        headers: user === null ? {} : { authorization: `Bearer ${await this.accessToken(user)}` },
       });
     return {
       request,

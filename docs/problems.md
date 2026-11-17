@@ -38,7 +38,7 @@ Responses never contain stack traces, SQL or internal hostnames. Server errors a
 
 ## `unauthorized`
 
-**401** — The request carries no valid credentials. The response includes a `WWW-Authenticate` challenge. Until authentication arrives (v0.2), every `/v1` route answers 401 outside the test environment.
+**401** — The request carries no valid credentials: the access token is missing, expired, or not one this API issued. The `WWW-Authenticate` challenge says `error="invalid_token"` when a token was sent: refresh it (`POST /v1/auth/refresh`) or log in again.
 
 ## `forbidden`
 

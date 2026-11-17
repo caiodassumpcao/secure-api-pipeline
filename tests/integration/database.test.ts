@@ -5,7 +5,7 @@ import { latestMigration, runMigrations } from '../../src/db/migrations.ts';
 import { AUDIT_RETENTION_DAYS } from '../../src/db/schema.ts';
 import { uuidv7 } from '../../src/lib/ids.ts';
 import { createLogger } from '../../src/lib/logger.ts';
-import { denyAllAuthenticator } from '../../src/plugins/authentication.ts';
+import { createTestTokenService } from '../helpers/keys.ts';
 import { createTestDatabase, type TestDatabase } from './helpers/database.ts';
 
 let empty: TestDatabase;
@@ -22,7 +22,7 @@ async function ready(testDatabase: TestDatabase) {
   const app = await buildApp({
     logger: createLogger({ level: 'silent' }),
     database: testDatabase.database,
-    authenticate: denyAllAuthenticator,
+    auth: { tokens: await createTestTokenService() },
     docs: { enabled: false },
     http: { corsOrigins: [], trustProxy: false },
   });
