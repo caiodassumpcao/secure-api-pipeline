@@ -4,6 +4,7 @@ import type { Role } from '../../db/schema.ts';
 import { uuidv7 } from '../../lib/ids.ts';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
 import type { RateLimiter } from '../../lib/rate-limiter.ts';
+import type { AppMetrics } from '../../telemetry/metrics.ts';
 import { recordAuditEvent, type RequestContext } from '../audit/audit.ts';
 import { createMembersRepository } from '../members/members.repository.ts';
 import { createWorkspacesRepository } from '../workspaces/workspaces.repository.ts';
@@ -27,6 +28,7 @@ export interface AuthServiceDependencies {
   readonly passwords: PasswordHasher;
   readonly tokens: TokenService;
   readonly limiter: RateLimiter;
+  readonly metrics: AppMetrics;
 }
 
 export interface Me extends User {
@@ -72,7 +74,13 @@ export type RefreshResult =
     }
   | { readonly status: 'reuse_detected'; readonly userId: string; readonly familyId: string };
 
-export function createAuthService({ db, passwords, tokens, limiter }: AuthServiceDependencies) {
+export function createAuthService({
+  db,
+  passwords,
+  tokens,
+  limiter,
+  metrics,
+}: AuthServiceDependencies) {
   const repository = createAuthRepository(db);
 
   return {
@@ -155,6 +163,7 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
         // Counted whether or not the account exists, so the limit reveals nothing.
         const limit = await limiter.hit(LOGIN_PER_EMAIL, input.email);
         if (!limit.allowed) {
+          metrics.loginFailed('rate_limited');
           return { status: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
         }
       }
@@ -169,7 +178,9 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
       if (!usable || !verified) {
         // The email of an unknown account is not recorded: it may be a typo'd
         // address of someone else, or a password typed in the wrong field.
-        return db.transaction(async (tx) => {
+        const reason =
+          credentials === undefined ? 'unknown_account' : lockedOut ? 'locked' : 'wrong_password';
+        const failed = await db.transaction(async (tx) => {
           const auth = createAuthRepository(tx);
           let deviceRevoked = false;
           let locked = false;
@@ -178,8 +189,6 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
             else deviceRevoked = (await auth.recordDeviceFailure(device.id)).revoked;
           }
           const target = credentials === undefined ? null : `user:${credentials.id}`;
-          const reason =
-            credentials === undefined ? 'unknown_account' : lockedOut ? 'locked' : 'wrong_password';
           await recordAuditEvent(
             tx,
             {
@@ -192,6 +201,8 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
           if (locked) await recordAuditEvent(tx, { action: 'auth.locked', target }, client);
           return { status: 'failed', deviceRevoked } as const;
         });
+        metrics.loginFailed(reason);
+        return failed;
       }
 
       const rehashed = passwords.needsRehash(credentials.passwordHash)
@@ -271,6 +282,7 @@ export function createAuthService({ db, passwords, tokens, limiter }: AuthServic
         return { status: 'rotated', userId: stored.userId, next } as const;
       });
 
+      if (outcome.status === 'reuse_detected') metrics.refreshTokenReuseDetected();
       if (outcome.status !== 'rotated') return outcome;
       const { accessToken, expiresIn } = await tokens.issueAccessToken(outcome.userId);
       return {

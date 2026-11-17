@@ -1,4 +1,5 @@
 import type { Db } from '../../db/database.ts';
+import type { AppMetrics } from '../../telemetry/metrics.ts';
 import { isForeignKeyViolation } from '../../db/errors.ts';
 import { uuidv7 } from '../../lib/ids.ts';
 import { toPage, type Page, type PageRequest } from '../../lib/pagination.ts';
@@ -46,7 +47,7 @@ function invalidAssignee(): HttpProblem {
   );
 }
 
-export function createTasksService(db: Db) {
+export function createTasksService(db: Db, metrics: AppMetrics) {
   const repository = createTasksRepository(db);
   const projects = createProjectsRepository(db);
 
@@ -115,6 +116,7 @@ export function createTasksService(db: Db) {
       const row = await mapAssigneeRace(
         repository.insert(workspaceId, { ...input, id: uuidv7(), projectId, createdBy: userId }),
       );
+      metrics.taskCreated();
       return toTask(row);
     },
 

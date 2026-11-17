@@ -7,6 +7,7 @@ import type { TokenService } from '../../src/modules/auth/tokens.ts';
 import { createTestTokenService } from './keys.ts';
 import { LogCapture } from './log-capture.ts';
 import { unlimited } from '../../src/lib/rate-limiter.ts';
+import { createAppMetrics } from '../../src/telemetry/metrics.ts';
 
 export interface TestAppOptions {
   ping?: () => Promise<void>;
@@ -34,6 +35,7 @@ export async function buildTestApp(options: TestAppOptions = {}) {
       passwords: createPasswordHasher(),
     },
     docs: { enabled: options.docs ?? false },
+    metrics: createAppMetrics(),
     limits: { limiter: unlimited, global: options.globalRateLimit ?? false },
     http: { corsOrigins: [], trustProxy: false, ...options.http },
   });

@@ -193,3 +193,99 @@ jobs:
       - name: Stop stack
         if: ${{ always() }}
         run: docker compose down --volumes
+
+  # Required check: runs on every pull request and always reports. The heavy
+  # steps (image build, the observability profile, the smoke test) are skipped
+  # when no telemetry, Compose, dashboard or dependency file changed.
+  observability:
+    name: observability
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # dorny/paths-filter lists the files of the pull request through the API.
+      pull-requests: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Detect telemetry changes
+        id: changes
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            observability:
+              - 'src/telemetry/**'
+              - 'src/main.ts'
+              - 'observability/**'
+              - 'scripts/observability-smoke.ts'
+              - 'compose.yaml'
+              - 'Dockerfile'
+              - '.env.example'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - '.github/workflows/ci.yml'
+
+      # Pushes to main always run the whole job.
+      - name: Decide
+        id: run
+        env:
+          EVENT: ${{ github.event_name }}
+          CHANGED: ${{ steps.changes.outputs.observability }}
+        run: |
+          if [ "$EVENT" != pull_request ] || [ "$CHANGED" = true ]; then
+            echo "smoke=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "smoke=false" >> "$GITHUB_OUTPUT"
+            echo "No telemetry, Compose or dashboard change: smoke test skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up
+        if: ${{ steps.run.outputs.smoke == 'true' }}
+        uses: ./.github/actions/setup
+
+      # Development values (every trace kept), the observability profile on,
+      # and metrics pushed every 5 seconds.
+      - name: Prepare environment
+        if: ${{ steps.run.outputs.smoke == 'true' }}
+        run: |
+          cp .env.example .env
+          {
+            echo 'COMPOSE_PROFILES=observability'
+            echo 'API_OTLP_ENDPOINT=http://otel-lgtm:4318'
+            echo 'OTEL_METRIC_EXPORT_INTERVAL=5000'
+          } >> .env
+
+      - name: Generate signing keys
+        if: ${{ steps.run.outputs.smoke == 'true' }}
+        run: |
+          pnpm keys:generate
+          chmod 644 keys/jwt-private.pem
+
+      - name: Build image
+        if: ${{ steps.run.outputs.smoke == 'true' }}
+        run: docker compose build api
+
+      - name: Start stack with the observability profile
+        if: ${{ steps.run.outputs.smoke == 'true' }}
+        run: docker compose up --detach --wait --wait-timeout 180
+
+      - name: Smoke test traces, logs, metrics and dashboard
+        if: ${{ steps.run.outputs.smoke == 'true' }}
+        run: pnpm smoke:observability
+
+      - name: Show logs
+        if: ${{ failure() && steps.run.outputs.smoke == 'true' }}
+        run: docker compose logs
+
+      - name: Stop stack
+        if: ${{ always() && steps.run.outputs.smoke == 'true' }}
+        run: docker compose down --volumes
