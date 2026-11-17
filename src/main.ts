@@ -1,6 +1,7 @@
 import { buildApp } from './app.ts';
 import { loadConfigOrExit } from './config/load-or-exit.ts';
 import { createDatabase } from './db/database.ts';
+import { latestMigration } from './db/migrations.ts';
 import { createLogger } from './lib/logger.ts';
 import { registerGracefulShutdown } from './lib/shutdown.ts';
 
@@ -8,7 +9,7 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 const config = loadConfigOrExit();
 const logger = createLogger(config.log);
-const database = createDatabase(config.database, logger);
+const database = createDatabase(config.database, logger, { expectedMigration: latestMigration() });
 const app = await buildApp({ logger, database });
 
 app.addHook('onClose', async () => {

@@ -23,7 +23,7 @@ describe('GET /health/ready', () => {
     const response = await app.inject({ method: 'GET', url: '/health/ready' });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: 'ok', checks: { database: 'ok' } });
+    expect(response.json()).toEqual({ status: 'ok', checks: { database: 'ok', migrations: 'ok' } });
     expect(ping).toHaveBeenCalledOnce();
   });
 
@@ -35,7 +35,10 @@ describe('GET /health/ready', () => {
     const response = await app.inject({ method: 'GET', url: '/health/ready' });
 
     expect(response.statusCode).toBe(503);
-    expect(response.json()).toEqual({ status: 'unavailable', checks: { database: 'unavailable' } });
+    expect(response.json()).toEqual({
+      status: 'unavailable',
+      checks: { database: 'unavailable', migrations: 'unknown' },
+    });
     expect(response.body).not.toContain('10.0.0.5');
     expect(logs.entries.find((entry) => entry.level === 'warn')).toMatchObject({
       msg: 'readiness check failed: database unavailable',
@@ -48,11 +51,45 @@ describe('GET /health/ready', () => {
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     const ping = vi.fn(() => new Promise<void>(() => undefined));
-    await app.register(healthRoutes, { database: { ping }, readinessTimeoutMs: 10 });
+    const migrationsApplied = vi.fn(() => Promise.resolve(true));
+    await app.register(healthRoutes, {
+      database: { ping, migrationsApplied },
+      readinessTimeoutMs: 10,
+    });
 
     const response = await app.inject({ method: 'GET', url: '/health/ready' });
 
     expect(response.statusCode).toBe(503);
+  });
+
+  it('returns 503 while database migrations are pending', async () => {
+    const { app, logs } = await buildTestApp({ migrationsApplied: () => Promise.resolve(false) });
+
+    const response = await app.inject({ method: 'GET', url: '/health/ready' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      status: 'unavailable',
+      checks: { database: 'ok', migrations: 'pending' },
+    });
+    expect(logs.entries.find((entry) => entry.level === 'warn')?.msg).toBe(
+      'readiness check failed: database migrations pending',
+    );
+  });
+
+  it('returns 503 when the migration status cannot be read', async () => {
+    const { app } = await buildTestApp({
+      migrationsApplied: () => Promise.reject(new Error('permission denied for schema drizzle')),
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/health/ready' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      status: 'unavailable',
+      checks: { database: 'ok', migrations: 'unknown' },
+    });
+    expect(response.body).not.toContain('permission');
   });
 
   it('does not log successful probes at info level', async () => {
