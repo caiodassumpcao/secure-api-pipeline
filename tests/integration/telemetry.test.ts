@@ -225,3 +225,59 @@ describe('database spans', () => {
     expect(recorded).not.toContain(PASSWORD);
   });
 });
+
+describe('logs', () => {
+  let receiver: OtlpReceiver;
+  let api: ApiProcess;
+  const requestId = `log-correlation-${Date.now()}`;
+
+  beforeAll(async () => {
+    receiver = await OtlpReceiver.start();
+    api = await startApiProcess({ DATABASE_URL: database.url, ...exportingTo(receiver) });
+    const { accessToken } = await signIn(api.baseUrl, `logged-${Date.now()}@example.test`);
+    await fetch(`${api.baseUrl}/v1/me`, {
+      headers: { authorization: `Bearer ${accessToken}`, 'x-request-id': requestId },
+    });
+  });
+
+  afterAll(async () => {
+    await api.stop();
+    await receiver.stop();
+  });
+
+  const completedLine = () =>
+    api.output
+      .filter((line) => line.startsWith('{'))
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.request_id === requestId && entry.msg === 'request completed');
+
+  it('carry the trace and span ids of the request, and the user id', async () => {
+    const line = await receiver.waitFor(completedLine);
+    const span = await receiver.waitFor(() =>
+      receiver.spans().find((candidate) => candidate.attributes['request.id'] === requestId),
+    );
+
+    expect(line).toMatchObject({
+      trace_id: span.traceId,
+      span_id: expect.stringMatching(/^[0-9a-f]{16}$/),
+      trace_flags: '01',
+      user_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+  });
+
+  it('reach the collector over OTLP, linked to the trace', async () => {
+    const line = await receiver.waitFor(completedLine);
+
+    const record = await receiver.waitFor(() =>
+      receiver
+        .logs()
+        .find(
+          (candidate) =>
+            candidate.attributes.request_id === requestId && candidate.body === 'request completed',
+        ),
+    );
+
+    expect(record.traceId).toBe(line.trace_id);
+    expect(record.attributes.user_id).toBe(line.user_id);
+  });
+});

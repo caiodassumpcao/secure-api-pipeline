@@ -47,6 +47,10 @@ export function registerAuthentication(app: FastifyInstance, authenticate: Authe
     }
     request.user = user;
     annotateRequestSpan({ 'user.id': user.id });
+    // Later log lines of the request, "request completed" included, name the
+    // user by id only (DESIGN §6).
+    request.log = request.log.child({ user_id: user.id });
+    reply.log = request.log;
   });
   // Params are validated by now; workspace-scoped routes name their tenant.
   app.addHook('preHandler', (request, _reply, done) => {

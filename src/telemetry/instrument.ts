@@ -3,6 +3,9 @@
  * Starts OpenTelemetry before any application module is imported, so the
  * instrumented libraries are patched when the app first loads them. Only the
  * API process loads it: `migrate` and the container health check do not.
+ *
+ * Nothing imported here may load pg or pino (the logger does): a library
+ * loaded before the hooks are registered is never patched.
  */
 import { diag, DiagLogLevel } from '@opentelemetry/api';
 import { register } from 'import-in-the-middle/register-hooks.mjs';
@@ -34,7 +37,9 @@ if (config.enabled) {
   // ESM imports of the instrumented libraries; CommonJS ones (Fastify's http,
   // pg-pool) are patched through require.
   register({ include: INSTRUMENTED_MODULES });
-  startTelemetry(config, { instrumentations: createInstrumentations() });
+  startTelemetry(config, {
+    instrumentations: createInstrumentations({ exportLogs: config.otlpEndpoint !== undefined }),
+  });
 
   // Loaded after the SDK started, so the instrumented pino is the one used.
   const { createLogger } = await import('../lib/logger.ts');

@@ -10,7 +10,13 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace';
+import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import {
+  BatchLogRecordProcessor,
+  type LogRecordExporter,
+  type LogRecordProcessor,
+} from '@opentelemetry/sdk-logs';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { z } from 'zod';
 import type { TelemetryConfig } from './config.ts';
@@ -33,8 +39,9 @@ export interface Telemetry {
 
 export interface TelemetryOverrides {
   readonly instrumentations?: Instrumentation[];
-  /** Replaces the OTLP span exporter (tests). */
+  /** Replace the OTLP exporters (tests). */
   readonly spanExporter?: SpanExporter;
+  readonly logExporter?: LogRecordExporter;
 }
 
 // The SDK registers process-wide providers; the process entry points reach the
@@ -63,6 +70,23 @@ function spanProcessors(config: TelemetryConfig, overrides: TelemetryOverrides):
 }
 
 /**
+ * Log records reach Loki over OTLP when an endpoint is set (DESIGN §6). They
+ * are taken from pino's serialized output, after redaction. stdout keeps the
+ * same lines: collecting it too would store every line twice.
+ */
+function logRecordProcessors(
+  config: TelemetryConfig,
+  overrides: TelemetryOverrides,
+): LogRecordProcessor[] {
+  const exporter =
+    overrides.logExporter ??
+    (config.otlpEndpoint === undefined ? undefined : new OTLPLogExporter());
+  return exporter === undefined
+    ? []
+    : [new BatchLogRecordProcessor({ exporter, maxQueueSize: 2_048, exportTimeoutMillis: 10_000 })];
+}
+
+/**
  * Starts the OpenTelemetry SDK (ADR-0006). Incoming trace context is never
  * extracted (`textMapPropagator: null`): clients cannot choose trace ids,
  * force sampling or inject baggage. Root traces are sampled at
@@ -87,7 +111,7 @@ export function startTelemetry(
     textMapPropagator: null,
     spanProcessors: spanProcessors(config, overrides),
     metricReaders: [],
-    logRecordProcessors: [],
+    logRecordProcessors: logRecordProcessors(config, overrides),
     instrumentations: overrides.instrumentations ?? [],
   });
   sdk.start();

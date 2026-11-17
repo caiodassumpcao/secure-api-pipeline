@@ -1,7 +1,7 @@
 import type { Attributes } from '@opentelemetry/api';
 import type { ExportResult } from '@opentelemetry/core';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace';
-import { redactUrl } from '../lib/logger.ts';
+import { redactUrl } from '../lib/redact-url.ts';
 
 /** Attribute keys that may carry credentials, whatever produced them. */
 const SENSITIVE_KEY = /authorization|cookie|password|passwd|secret|token|api[-_.]?key/i;

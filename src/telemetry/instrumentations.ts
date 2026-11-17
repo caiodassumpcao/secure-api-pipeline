@@ -2,7 +2,8 @@ import { FastifyOtelInstrumentation } from '@fastify/otel';
 import type { Instrumentation } from '@opentelemetry/instrumentation';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { PgInstrumentation } from '@opentelemetry/instrumentation-pg';
-import { redactUrl } from '../lib/logger.ts';
+import { PinoInstrumentation } from '@opentelemetry/instrumentation-pino';
+import { redactUrl } from '../lib/redact-url.ts';
 
 /** Probes and docs: frequent or static, not worth a trace or a metric series. */
 const UNTRACED_PREFIXES = ['/health/', '/docs', '/openapi.json'];
@@ -26,7 +27,7 @@ export function redactedQuery(url: string): string | undefined {
  * Exceptions are not recorded by the framework: their messages can hold
  * values (see src/telemetry/traced.ts).
  */
-export function createInstrumentations(): Instrumentation[] {
+export function createInstrumentations(options: { exportLogs: boolean }): Instrumentation[] {
   return [
     new HttpInstrumentation({
       // No outgoing calls today; the exporters' own requests are not traced.
@@ -59,5 +60,8 @@ export function createInstrumentations(): Instrumentation[] {
       requireParentSpan: true,
       ignoreConnectSpans: true,
     }),
+    // Adds trace_id, span_id and trace_flags to every log line written in a
+    // span, and sends the serialized (already redacted) lines over OTLP.
+    new PinoInstrumentation({ disableLogSending: !options.exportLogs }),
   ];
 }
