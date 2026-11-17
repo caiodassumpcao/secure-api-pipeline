@@ -1,6 +1,7 @@
 import { FastifyOtelInstrumentation } from '@fastify/otel';
 import type { Instrumentation } from '@opentelemetry/instrumentation';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
+import { PgInstrumentation } from '@opentelemetry/instrumentation-pg';
 import { redactUrl } from '../lib/logger.ts';
 
 /** Probes and docs: frequent or static, not worth a trace or a metric series. */
@@ -48,6 +49,15 @@ export function createInstrumentations(): Instrumentation[] {
         // @fastify/otel records the raw URL as the path, query string included.
         span.setAttribute('url.path', request.url.split('?', 1)[0] ?? '');
       },
+    }),
+    // Query spans record the SQL text, which Drizzle always parameterizes
+    // ($1, $2…), never the values. Only queries made for a request are
+    // traced: no spans for pool connections or background statements.
+    new PgInstrumentation({
+      enhancedDatabaseReporting: false,
+      addSqlCommenterCommentToQueries: false,
+      requireParentSpan: true,
+      ignoreConnectSpans: true,
     }),
   ];
 }

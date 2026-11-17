@@ -178,3 +178,43 @@ describe('traces', () => {
     expect(paths.filter((path) => path.startsWith('/health/'))).toEqual([]);
   });
 });
+
+describe('database spans', () => {
+  let receiver: OtlpReceiver;
+  let api: ApiProcess;
+  const email = `queried-${Date.now()}@example.test`;
+
+  beforeAll(async () => {
+    receiver = await OtlpReceiver.start();
+    api = await startApiProcess({ DATABASE_URL: database.url, ...exportingTo(receiver) });
+    await signIn(api.baseUrl, email);
+  });
+
+  afterAll(async () => {
+    await api.stop();
+    await receiver.stop();
+  });
+
+  it('nest parameterized queries under the request that ran them, without values', async () => {
+    const login = await receiver.waitFor(() =>
+      receiver
+        .spans()
+        .find((span) => span.kind === 2 && span.attributes['http.route'] === '/v1/auth/login'),
+    );
+    const queries = await receiver.waitFor(() => {
+      const found = receiver
+        .spans()
+        .filter((span) => span.traceId === login.traceId && span.scope.includes('pg'));
+      return found.length > 0 ? found : undefined;
+    });
+
+    expect(queries[0]?.attributes).toMatchObject({
+      'db.system.name': 'postgresql',
+      'db.query.text': expect.stringContaining('$1'),
+    });
+    const recorded = JSON.stringify(queries);
+    expect(recorded).not.toContain(email);
+    expect(recorded).not.toContain('argon2id');
+    expect(recorded).not.toContain(PASSWORD);
+  });
+});
