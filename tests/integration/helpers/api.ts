@@ -119,6 +119,12 @@ export class TestApi {
     await this.addMember(owner, workspaceId, viewer, 'viewer');
     return { workspaceId, owner, admin, member, viewer };
   }
+
+  async createProject(actor: TestUser, workspaceId: string, name = 'Project'): Promise<string> {
+    const response = await this.as(actor).post(`/v1/workspaces/${workspaceId}/projects`, { name });
+    expectStatus(response, 201);
+    return response.json<{ id: string }>().id;
+  }
 }
 
 /** Fails with the response body, which explains unexpected statuses. */
