@@ -23,6 +23,28 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
+  # One-shot: applies migrations, then exits. The API starts only if it succeeded.
+  migrate:
+    build: .
+    image: secure-api-pipeline:local
+    command: [node, dist/migrate.js]
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # The image HEALTHCHECK probes the API, which this container does not run.
+    healthcheck:
+      disable: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: 'no'
+
   api:
     build: .
     image: secure-api-pipeline:local
@@ -36,6 +58,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     read_only: true
     tmpfs:
       - /tmp
