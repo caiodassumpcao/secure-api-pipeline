@@ -8,6 +8,7 @@ import { createRateLimiter } from './lib/rate-limiter.ts';
 import { registerGracefulShutdown } from './lib/shutdown.ts';
 import { createPasswordHasher } from './modules/auth/password.ts';
 import { createTokenService } from './modules/auth/tokens.ts';
+import { activeTelemetry } from './telemetry/sdk.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -39,7 +40,11 @@ app.addHook('onClose', async () => {
 });
 
 const { shutdown } = registerGracefulShutdown({
-  close: () => app.close(),
+  // Stop serving first, then flush the telemetry the last requests produced.
+  close: async () => {
+    await app.close();
+    await activeTelemetry()?.shutdown();
+  },
   logger,
   timeoutMs: SHUTDOWN_TIMEOUT_MS,
 });

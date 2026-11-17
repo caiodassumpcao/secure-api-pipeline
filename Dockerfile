@@ -41,4 +41,5 @@ USER node
 EXPOSE 3000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
     CMD ["node", "dist/healthcheck.js"]
-CMD ["node", "dist/main.js"]
+# The telemetry preload must run before the app imports anything (ADR-0006).
+CMD ["node", "--import", "./dist/telemetry/instrument.js", "dist/main.js"]
