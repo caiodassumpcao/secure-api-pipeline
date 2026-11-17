@@ -6,7 +6,9 @@ import { uuidv7 } from '../../../src/lib/ids.ts';
 import { createLogger } from '../../../src/lib/logger.ts';
 import { createPasswordHasher, type PasswordHasher } from '../../../src/modules/auth/password.ts';
 import type { TokenService } from '../../../src/modules/auth/tokens.ts';
-import { createTestTokenService } from '../../helpers/keys.ts';
+import { loadSigningKeys, type SigningKeys } from '../../../src/modules/auth/keys.ts';
+import { createTestTokenService, generatePems } from '../../helpers/keys.ts';
+import type { LogCapture } from '../../helpers/log-capture.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
 import { createRateLimiter, unlimited } from '../../../src/lib/rate-limiter.ts';
 
@@ -43,10 +45,18 @@ export class TestApi {
   readonly app: App;
   readonly testDatabase: TestDatabase;
   readonly tokens: TokenService;
+  /** The keys of {@link tokens}, to forge expired or altered tokens in security tests. */
+  readonly keys: SigningKeys;
   private sequence = 0;
   private readonly accessTokens = new Map<string, Promise<string>>();
 
-  private constructor(app: App, testDatabase: TestDatabase, tokens: TokenService) {
+  private constructor(
+    app: App,
+    testDatabase: TestDatabase,
+    tokens: TokenService,
+    keys: SigningKeys,
+  ) {
+    this.keys = keys;
     this.app = app;
     this.testDatabase = testDatabase;
     this.tokens = tokens;
@@ -54,12 +64,16 @@ export class TestApi {
 
   /** `rateLimits`: enforce the real limits, off by default (suites send hundreds of requests). */
   static async start(
-    options: { passwords?: PasswordHasher; rateLimits?: boolean } = {},
+    options: { passwords?: PasswordHasher; rateLimits?: boolean; logs?: LogCapture } = {},
   ): Promise<TestApi> {
     const testDatabase = await createTestDatabase();
-    const tokens = await createTestTokenService();
+    const keys = await loadSigningKeys(generatePems());
+    const tokens = await createTestTokenService({ keys });
     const app = await buildApp({
-      logger: createLogger({ level: 'silent' }),
+      logger:
+        options.logs === undefined
+          ? createLogger({ level: 'silent' })
+          : createLogger({ level: 'trace' }, options.logs),
       database: testDatabase.database,
       auth: { tokens, passwords: options.passwords ?? createPasswordHasher() },
       docs: { enabled: false },
@@ -70,7 +84,7 @@ export class TestApi {
       http: { corsOrigins: [], trustProxy: false },
     });
     await app.ready();
-    return new TestApi(app, testDatabase, tokens);
+    return new TestApi(app, testDatabase, tokens, keys);
   }
 
   async stop(): Promise<void> {
