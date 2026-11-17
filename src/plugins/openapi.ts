@@ -17,7 +17,7 @@ const DESCRIPTION = `Multi-tenant project and task tracker.
 Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details (\`application/problem+json\`).
 Lists use cursor pagination: \`?limit=\` (1–100) and the opaque \`nextCursor\` of the previous page.
 
-Until v0.2 delivers authentication, \`/v1\` routes answer 401 outside the test environment.`;
+\`/v1\` routes require an access token: \`Authorization: Bearer <token>\`.`;
 
 /**
  * OpenAPI 3.1 document generated from the route zod schemas, served at
@@ -28,11 +28,21 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
     openapi: {
       openapi: '3.1.0',
       info: { title: 'secure-api-pipeline', version, description: DESCRIPTION },
+      components: {
+        securitySchemes: {
+          bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+          refreshCookie: { type: 'apiKey', in: 'cookie', name: '__Secure-refresh' },
+        },
+      },
+      // Every route needs a token unless its schema says otherwise (`security: []`).
+      security: [{ bearerAuth: [] }],
       tags: [
+        { name: 'auth', description: 'Accounts and sessions' },
         { name: 'workspaces', description: 'Tenants' },
         { name: 'members', description: 'Workspace memberships and roles' },
         { name: 'projects' },
         { name: 'tasks' },
+        { name: 'audit', description: 'Append-only trail of security-relevant actions' },
         { name: 'health', description: 'Probes for orchestrators and deploys' },
       ],
     },

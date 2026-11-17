@@ -90,15 +90,6 @@ export function createMembersRepository(db: Executor) {
         .where(and(eq(memberships.workspaceId, workspaceId), eq(memberships.role, 'owner')));
       return row?.owners ?? 0;
     },
-
-    /**
-     * Not workspace-scoped: users exist outside workspaces. Only used to add an
-     * existing account to a workspace the caller manages.
-     */
-    async findUserIdByEmail(email: string): Promise<string | undefined> {
-      const [row] = await db.select({ id: users.id }).from(users).where(eq(users.email, email));
-      return row?.id;
-    },
   };
 }
 

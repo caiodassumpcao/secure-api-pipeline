@@ -27,6 +27,7 @@ export const ProblemTypes = {
     title: 'Unsupported Media Type',
     status: 415,
   },
+  tooManyRequests: { slug: 'too-many-requests', title: 'Too Many Requests', status: 429 },
   internal: { slug: 'internal-error', title: 'Internal Server Error', status: 500 },
 } as const satisfies Record<string, ProblemType>;
 

@@ -5,14 +5,14 @@ import { buildTestApp } from '../helpers/test-app.ts';
 describe('buildApp', () => {
   it('never writes credentials from a request to the logs', async () => {
     const { app, logs } = await buildTestApp();
-    app.post('/v1/auth/login', (request) => {
+    app.post('/test/credentials', (request) => {
       request.log.info({ body: request.body, headers: request.headers }, 'login attempt');
       throw new Error('boom');
     });
 
     await app.inject({
       method: 'POST',
-      url: '/v1/auth/login?token=query-token-secret',
+      url: '/test/credentials?token=query-token-secret',
       headers: {
         authorization: 'Bearer header-token-secret',
         cookie: 'refresh_token=cookie-secret',

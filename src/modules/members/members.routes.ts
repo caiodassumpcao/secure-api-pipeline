@@ -4,6 +4,7 @@ import { ROLES } from '../../db/schema.ts';
 import { pageSchema, paginationQuery } from '../../lib/pagination.ts';
 import { idSchema, noContentSchema, problemResponses, timestampSchema } from '../../lib/schemas.ts';
 import { currentUser } from '../../plugins/authentication.ts';
+import { requestContext } from '../audit/audit.ts';
 import type { MembersService } from './members.service.ts';
 
 const roleSchema = z.enum(ROLES);
@@ -50,26 +51,6 @@ export const memberRoutes: FastifyPluginCallbackZod<MemberRoutesOptions> = (
       }),
   );
 
-  app.post(
-    '/workspaces/:wsId/members',
-    {
-      schema: {
-        tags,
-        summary: 'Add an existing account as a member (owner, admin; only owners grant owner)',
-        params: workspaceParams,
-        body: z.object({ email: z.email().max(254).toLowerCase(), role: roleSchema }).strict(),
-        response: { 201: memberSchema, ...problemResponses(400, 401, 403, 404, 409) },
-      },
-    },
-    async (request, reply) => {
-      const member = await service.add(currentUser(request).id, request.params.wsId, request.body);
-      return reply
-        .code(201)
-        .header('location', `/v1/workspaces/${request.params.wsId}/members/${member.userId}`)
-        .send(member);
-    },
-  );
-
   app.get(
     '/workspaces/:wsId/members/:userId',
     {
@@ -101,6 +82,7 @@ export const memberRoutes: FastifyPluginCallbackZod<MemberRoutesOptions> = (
         request.params.wsId,
         request.params.userId,
         request.body.role,
+        requestContext(request),
       ),
   );
 
@@ -116,7 +98,12 @@ export const memberRoutes: FastifyPluginCallbackZod<MemberRoutesOptions> = (
       },
     },
     async (request, reply) => {
-      await service.remove(currentUser(request).id, request.params.wsId, request.params.userId);
+      await service.remove(
+        currentUser(request).id,
+        request.params.wsId,
+        request.params.userId,
+        requestContext(request),
+      );
       return reply.code(204).send(null);
     },
   );

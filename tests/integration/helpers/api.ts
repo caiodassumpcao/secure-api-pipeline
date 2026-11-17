@@ -4,8 +4,13 @@ import type { Role } from '../../../src/db/schema.ts';
 import { users } from '../../../src/db/schema.ts';
 import { uuidv7 } from '../../../src/lib/ids.ts';
 import { createLogger } from '../../../src/lib/logger.ts';
-import { createTestAuthenticator, TEST_USER_HEADER } from '../../../src/plugins/authentication.ts';
+import { createPasswordHasher, type PasswordHasher } from '../../../src/modules/auth/password.ts';
+import type { TokenService } from '../../../src/modules/auth/tokens.ts';
+import { loadSigningKeys, type SigningKeys } from '../../../src/modules/auth/keys.ts';
+import { createTestTokenService, generatePems } from '../../helpers/keys.ts';
+import type { LogCapture } from '../../helpers/log-capture.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
+import { createRateLimiter, unlimited } from '../../../src/lib/rate-limiter.ts';
 
 export interface TestUser {
   readonly id: string;
@@ -31,27 +36,55 @@ export interface Team {
   readonly viewer: TestUser;
 }
 
-/** Real app + real PostgreSQL database (one per test file), identity via the test stub. */
+/**
+ * Real app + real PostgreSQL database (one per test file). Callers authenticate
+ * with real access tokens, issued directly by the token service: logging in
+ * would run argon2 for each of the hundreds of users the suites create.
+ */
 export class TestApi {
   readonly app: App;
   readonly testDatabase: TestDatabase;
+  readonly tokens: TokenService;
+  /** The keys of {@link tokens}, to forge expired or altered tokens in security tests. */
+  readonly keys: SigningKeys;
   private sequence = 0;
+  private readonly accessTokens = new Map<string, Promise<string>>();
 
-  private constructor(app: App, testDatabase: TestDatabase) {
+  private constructor(
+    app: App,
+    testDatabase: TestDatabase,
+    tokens: TokenService,
+    keys: SigningKeys,
+  ) {
+    this.keys = keys;
     this.app = app;
     this.testDatabase = testDatabase;
+    this.tokens = tokens;
   }
 
-  static async start(): Promise<TestApi> {
+  /** `rateLimits`: enforce the real limits, off by default (suites send hundreds of requests). */
+  static async start(
+    options: { passwords?: PasswordHasher; rateLimits?: boolean; logs?: LogCapture } = {},
+  ): Promise<TestApi> {
     const testDatabase = await createTestDatabase();
+    const keys = await loadSigningKeys(generatePems());
+    const tokens = await createTestTokenService({ keys });
     const app = await buildApp({
-      logger: createLogger({ level: 'silent' }),
+      logger:
+        options.logs === undefined
+          ? createLogger({ level: 'silent' })
+          : createLogger({ level: 'trace' }, options.logs),
       database: testDatabase.database,
-      authenticate: createTestAuthenticator('test'),
+      auth: { tokens, passwords: options.passwords ?? createPasswordHasher() },
       docs: { enabled: false },
+      limits:
+        options.rateLimits === true
+          ? { limiter: createRateLimiter(testDatabase.database.db), global: true }
+          : { limiter: unlimited, global: false },
+      http: { corsOrigins: [], trustProxy: false },
     });
     await app.ready();
-    return new TestApi(app, testDatabase);
+    return new TestApi(app, testDatabase, tokens, keys);
   }
 
   async stop(): Promise<void> {
@@ -63,20 +96,29 @@ export class TestApi {
     return this.testDatabase.database.db;
   }
 
-  /** Users exist outside workspaces; until Phase 2 adds registration they are seeded. */
+  /** Inserted directly: tests authenticate with issued tokens, not with the password. */
   async createUser(name = 'Test User'): Promise<TestUser> {
     const user = { id: uuidv7(), email: `user-${uuidv7()}@example.test`, name };
     await this.db.insert(users).values({ ...user, passwordHash: 'not-a-real-hash' });
     return user;
   }
 
+  /** A valid access token for the user, issued once per test file. */
+  accessToken(user: TestUser): Promise<string> {
+    const issued = this.accessTokens.get(user.id);
+    if (issued !== undefined) return issued;
+    const pending = this.tokens.issueAccessToken(user.id).then(({ accessToken }) => accessToken);
+    this.accessTokens.set(user.id, pending);
+    return pending;
+  }
+
   as(user: TestUser | null): ApiClient {
-    const request = (method: Method, url: string, payload?: object) =>
+    const request = async (method: Method, url: string, payload?: object) =>
       this.app.inject({
         method,
         url,
         ...(payload === undefined ? {} : { payload }),
-        headers: user === null ? {} : { [TEST_USER_HEADER]: user.id },
+        headers: user === null ? {} : { authorization: `Bearer ${await this.accessToken(user)}` },
       });
     return {
       request,
@@ -98,12 +140,25 @@ export class TestApi {
     return response.json<{ id: string }>().id;
   }
 
-  async addMember(actor: TestUser, workspaceId: string, user: TestUser, role: Role): Promise<void> {
-    const response = await this.as(actor).post(`/v1/workspaces/${workspaceId}/members`, {
-      email: user.email,
+  /** Creates an invitation link and returns its token. */
+  async invite(
+    actor: TestUser,
+    workspaceId: string,
+    role: Role,
+    email?: string,
+  ): Promise<{ id: string; token: string }> {
+    const response = await this.as(actor).post(`/v1/workspaces/${workspaceId}/invitations`, {
       role,
+      ...(email === undefined ? {} : { email }),
     });
     expectStatus(response, 201);
+    return response.json<{ id: string; token: string }>();
+  }
+
+  /** The way members join a workspace: an invitation, accepted by the invitee. */
+  async addMember(actor: TestUser, workspaceId: string, user: TestUser, role: Role): Promise<void> {
+    const { token } = await this.invite(actor, workspaceId, role, user.email);
+    expectStatus(await this.as(user).post('/v1/invitations/accept', { token }), 201);
   }
 
   /** A workspace with one user per role. */

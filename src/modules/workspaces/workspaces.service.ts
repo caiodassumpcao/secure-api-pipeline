@@ -3,6 +3,7 @@ import { isUniqueViolation } from '../../db/errors.ts';
 import { uuidv7 } from '../../lib/ids.ts';
 import { toPage, type Page, type PageRequest } from '../../lib/pagination.ts';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
+import { recordAuditEvent, type RequestContext } from '../audit/audit.ts';
 import { authorize, WORKSPACE_NOT_FOUND } from '../auth/access.ts';
 import { createMembersRepository } from '../members/members.repository.ts';
 import {
@@ -85,11 +86,25 @@ export function createWorkspacesService(db: Db) {
     },
 
     /** Deletes the workspace with its memberships, projects and tasks (cascade). */
-    async delete(userId: string, workspaceId: string): Promise<void> {
+    /** The audit event outlives the workspace: audit_events has no foreign keys. */
+    async delete(userId: string, workspaceId: string, context: RequestContext): Promise<void> {
       await authorize(db, workspaceId, userId, 'workspace:delete');
-      if (!(await repository.delete(workspaceId))) {
-        throw new HttpProblem(ProblemTypes.notFound, WORKSPACE_NOT_FOUND);
-      }
+      await db.transaction(async (tx) => {
+        const deleted = await createWorkspacesRepository(tx).delete(workspaceId);
+        if (deleted === undefined)
+          throw new HttpProblem(ProblemTypes.notFound, WORKSPACE_NOT_FOUND);
+        await recordAuditEvent(
+          tx,
+          {
+            action: 'workspace.deleted',
+            actorId: userId,
+            workspaceId,
+            target: `workspace:${workspaceId}`,
+            metadata: deleted,
+          },
+          context,
+        );
+      });
     },
   };
 }

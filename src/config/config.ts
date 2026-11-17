@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
@@ -12,6 +13,26 @@ export interface Config {
   readonly log: { readonly level: LogLevel };
   readonly database: { readonly url: string };
   readonly docs: { readonly enabled: boolean };
+  readonly jwt: JwtConfig;
+  /** Origins allowed to call the API from a browser (CORS, refresh CSRF check). */
+  readonly cors: { readonly origins: readonly string[] };
+  /**
+   * Proxies whose `X-Forwarded-For` is trusted to resolve the client IP: a hop
+   * count or a list of addresses and CIDR ranges. Off (`false`) by default.
+   */
+  readonly trustProxy: TrustProxy;
+}
+
+export type TrustProxy = false | number | readonly string[];
+
+export interface JwtConfig {
+  /** Ed25519 key files (PEM). Optional here: only the API process needs them. */
+  readonly privateKeyFile: string | undefined;
+  readonly publicKeyFile: string | undefined;
+  /** Public key of the previous signing key, accepted during a rotation. */
+  readonly previousPublicKeyFile: string | undefined;
+  readonly issuer: string;
+  readonly audience: string;
 }
 
 /**
@@ -19,6 +40,50 @@ export interface Config {
  * holds the value (Docker / Compose secrets).
  */
 const FILE_BACKED_VARIABLES = ['DATABASE_URL'] as const;
+
+const MAX_TRUSTED_PROXY_HOPS = 10;
+
+/** `10.0.0.1`, `10.0.0.0/8`, `fd00::/8`: an IP address with an optional prefix length. */
+function isAddressOrCidr(entry: string): boolean {
+  const [address = '', prefix, ...rest] = entry.split('/');
+  const version = isIP(address);
+  if (version === 0 || rest.length > 0) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  return Number(prefix) <= (version === 4 ? 32 : 128);
+}
+
+const trustProxySchema = z.string().transform((value, ctx): number | string[] => {
+  if (/^\d+$/.test(value)) {
+    const hops = Number(value);
+    if (hops >= 1 && hops <= MAX_TRUSTED_PROXY_HOPS) return hops;
+  } else {
+    const entries = value.split(',').map((entry) => entry.trim());
+    if (entries.every(isAddressOrCidr)) return entries;
+  }
+  ctx.addIssue({
+    code: 'custom',
+    message: `must be a hop count (1-${MAX_TRUSTED_PROXY_HOPS}) or a comma-separated list of IP addresses or CIDR ranges`,
+  });
+  return z.NEVER;
+});
+
+/** `https://app.example.com`: scheme, host and optional port, nothing else. */
+function isOrigin(entry: string): boolean {
+  if (!URL.canParse(entry)) return false;
+  const url = new URL(entry);
+  return (url.protocol === 'https:' || url.protocol === 'http:') && url.origin === entry;
+}
+
+const corsOriginsSchema = z.string().transform((value, ctx) => {
+  const origins = value.split(',').map((entry) => entry.trim());
+  if (origins.every(isOrigin)) return origins;
+  ctx.addIssue({
+    code: 'custom',
+    message: 'must be a comma-separated list of origins (scheme://host[:port], no path)',
+  });
+  return z.NEVER;
+});
 
 /** Passwords that must never reach production (dev defaults and common guesses). */
 const WEAK_DATABASE_PASSWORDS = new Set([
@@ -45,6 +110,15 @@ const envSchema = z
       .enum(['true', 'false'], { error: 'must be true or false' })
       .transform((value) => value === 'true')
       .optional(),
+    JWT_PRIVATE_KEY_FILE: z.string().optional(),
+    JWT_PUBLIC_KEY_FILE: z.string().optional(),
+    JWT_PREVIOUS_PUBLIC_KEY_FILE: z.string().optional(),
+    JWT_ISSUER: z.string().min(1).default('secure-api-pipeline'),
+    JWT_AUDIENCE: z.string().min(1).default('secure-api-pipeline'),
+    CORS_ORIGINS: corsOriginsSchema.optional(),
+    // `true` (trust any proxy) is deliberately not accepted: it would let any
+    // client choose its IP and evade per-IP rate limits.
+    TRUST_PROXY: trustProxySchema.optional(),
     // Error messages must never echo the value: the URL carries credentials.
     DATABASE_URL: z.url({
       protocol: /^postgres(ql)?$/,
@@ -53,6 +127,16 @@ const envSchema = z
     }),
   })
   .superRefine((env, ctx) => {
+    if (
+      env.NODE_ENV === 'production' &&
+      env.CORS_ORIGINS?.some((origin) => !origin.startsWith('https:'))
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['CORS_ORIGINS'],
+        message: 'must only list https:// origins in production',
+      });
+    }
     // zod still runs this refinement when the URL check failed (non-aborting
     // issue). Never let it throw: Node's URL errors carry the input, password
     // included, in their `input` property.
@@ -155,5 +239,14 @@ export function loadConfig(
     log: { level: parsed.LOG_LEVEL },
     database: { url: parsed.DATABASE_URL },
     docs: { enabled: parsed.API_DOCS_ENABLED ?? parsed.NODE_ENV !== 'production' },
+    jwt: {
+      privateKeyFile: parsed.JWT_PRIVATE_KEY_FILE,
+      publicKeyFile: parsed.JWT_PUBLIC_KEY_FILE,
+      previousPublicKeyFile: parsed.JWT_PREVIOUS_PUBLIC_KEY_FILE,
+      issuer: parsed.JWT_ISSUER,
+      audience: parsed.JWT_AUDIENCE,
+    },
+    cors: { origins: parsed.CORS_ORIGINS ?? [] },
+    trustProxy: parsed.TRUST_PROXY ?? false,
   };
 }

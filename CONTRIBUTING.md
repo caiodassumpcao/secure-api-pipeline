@@ -36,6 +36,7 @@ To run the whole stack in containers instead: `docker compose up -d --build --wa
 | `pnpm test:coverage`    | Every suite, with the coverage gate (85 %)                                        |
 | `pnpm db:generate`      | Generates a SQL migration in `drizzle/` from `src/db/schema.ts`                   |
 | `pnpm db:migrate`       | Applies pending migrations to `DATABASE_URL`                                      |
+| `pnpm keys:generate`    | Writes a development Ed25519 key pair for access tokens to `keys/`                |
 
 Run `pnpm lint && pnpm typecheck && pnpm test` before every push, and `pnpm test:integration` when a change touches data or routes; CI runs all of them. Generated migrations are reviewed like code: expand/contract, no destructive statement in the same release as the code that stops using a column.
 

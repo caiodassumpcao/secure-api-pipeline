@@ -28,6 +28,9 @@ interface Fixture extends Team {
   readonly projectId: string;
   /** Created by `extra`. */
   readonly taskId: string;
+  /** Pending invitations, created by the owner. */
+  readonly memberInvitationId: string;
+  readonly ownerInvitationId: string;
 }
 
 async function fixture(): Promise<Fixture> {
@@ -41,7 +44,18 @@ async function fixture(): Promise<Fixture> {
   await api.addMember(team.owner, team.workspaceId, extra, 'member');
   const projectId = await api.createProject(team.owner, team.workspaceId);
   const taskId = await api.createTask(extra, team.workspaceId, projectId);
-  return { ...team, coOwner, extra, outsider, projectId, taskId };
+  const { id: memberInvitationId } = await api.invite(team.owner, team.workspaceId, 'member');
+  const { id: ownerInvitationId } = await api.invite(team.owner, team.workspaceId, 'owner');
+  return {
+    ...team,
+    coOwner,
+    extra,
+    outsider,
+    projectId,
+    taskId,
+    memberInvitationId,
+    ownerInvitationId,
+  };
 }
 
 interface Case {
@@ -87,11 +101,29 @@ const CASES: Case[] = [
     run: (f, a) => as(a).get(`${ws(f)}/members/${f.extra.id}`),
   },
   {
-    name: 'add a member',
+    name: 'invite a member',
     action: 'member:manage',
     success: 201,
     run: async (f, a) =>
-      as(a).post(`${ws(f)}/members`, { email: f.outsider.email, role: 'member' }),
+      as(a).post(`${ws(f)}/invitations`, { email: f.outsider.email, role: 'member' }),
+  },
+  {
+    name: 'list pending invitations',
+    action: 'member:manage',
+    success: 200,
+    run: (f, a) => as(a).get(`${ws(f)}/invitations`),
+  },
+  {
+    name: 'revoke an invitation',
+    action: 'member:manage',
+    success: 204,
+    run: (f, a) => as(a).delete(`${ws(f)}/invitations/${f.memberInvitationId}`),
+  },
+  {
+    name: 'revoke an owner invitation',
+    action: 'member:manage-owners',
+    success: 204,
+    run: (f, a) => as(a).delete(`${ws(f)}/invitations/${f.ownerInvitationId}`),
   },
   {
     name: 'change a member’s role',
@@ -106,10 +138,10 @@ const CASES: Case[] = [
     run: (f, a) => as(a).delete(`${ws(f)}/members/${f.extra.id}`),
   },
   {
-    name: 'add an owner (transfer ownership)',
+    name: 'invite an owner (transfer ownership)',
     action: 'member:manage-owners',
     success: 201,
-    run: (f, a) => as(a).post(`${ws(f)}/members`, { email: f.outsider.email, role: 'owner' }),
+    run: (f, a) => as(a).post(`${ws(f)}/invitations`, { email: f.outsider.email, role: 'owner' }),
   },
   {
     name: 'change an owner’s role',
@@ -183,6 +215,12 @@ const CASES: Case[] = [
     success: 204,
     run: (f, a) => as(a).delete(`${ws(f)}/tasks/${f.taskId}`),
   },
+  {
+    name: 'read the audit log',
+    action: 'audit:read',
+    success: 200,
+    run: (f, a) => as(a).get(`${ws(f)}/audit-events`),
+  },
 ];
 
 const ROLES = ['owner', 'admin', 'member', 'viewer'] as const satisfies readonly Role[];
@@ -228,7 +266,6 @@ describe('authorization matrix', () => {
       ...CASES.map((testCase) => testCase.action),
       'task:delete-own',
     ]);
-    // Read audit log: endpoint arrives with the audit trail (Phase 2).
-    expect(new Set(Object.keys(PERMISSIONS))).toEqual(new Set([...tested, 'audit:read']));
+    expect(new Set(Object.keys(PERMISSIONS))).toEqual(tested);
   });
 });

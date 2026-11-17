@@ -3,6 +3,9 @@ import {
   date,
   foreignKey,
   index,
+  inet,
+  integer,
+  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
@@ -37,6 +40,8 @@ export const users = pgTable('users', {
   name: text('name').notNull(),
   createdAt: createdAt(),
   lockedUntil: timestamp('locked_until', { withTimezone: true }),
+  /** Consecutive failed logins from clients without a device cookie (ADR-0009). */
+  failedLoginAttempts: integer('failed_login_attempts').notNull().default(0),
 });
 
 export const workspaces = pgTable('workspaces', {
@@ -116,6 +121,144 @@ export const tasks = pgTable(
     // Supports the assignee foreign key when a member is removed.
     index('tasks_assignee_idx').on(table.workspaceId, table.assigneeId),
   ],
+);
+
+const expiresAt = () => timestamp('expires_at', { withTimezone: true }).notNull();
+
+// Opaque secrets (refresh tokens, device cookies, invitation links) are never
+// stored: only their SHA-256, hex-encoded (src/lib/opaque-token.ts).
+
+/** One login session: rotation keeps the family, reuse revokes all of it (ADR-0004). */
+export const refreshTokenFamilies = pgTable(
+  'refresh_token_families',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: createdAt(),
+    /** Absolute lifetime of the session, whatever the rotations. */
+    expiresAt: expiresAt(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedReason: text('revoked_reason'),
+  },
+  (table) => [
+    index('refresh_token_families_user_id_idx').on(table.userId),
+    index('refresh_token_families_expires_at_idx').on(table.expiresAt),
+  ],
+);
+
+export const refreshTokens = pgTable(
+  'refresh_tokens',
+  {
+    id: uuid('id').primaryKey(),
+    familyId: uuid('family_id')
+      .notNull()
+      .references(() => refreshTokenFamilies.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    createdAt: createdAt(),
+    /** Idle lifetime: each rotation issues a token with a new one. */
+    expiresAt: expiresAt(),
+    /** Set once the token has been exchanged; presenting it again is reuse. */
+    replacedBy: uuid('replaced_by'),
+    rotatedAt: timestamp('rotated_at', { withTimezone: true }),
+  },
+  (table) => [
+    index('refresh_tokens_family_id_idx').on(table.familyId),
+    foreignKey({
+      name: 'refresh_tokens_replaced_by_fk',
+      columns: [table.replacedBy],
+      foreignColumns: [table.id],
+    }).onDelete('set null'),
+  ],
+);
+
+/** Device cookies: clients that already logged in bypass the account lockout (ADR-0009). */
+export const trustedDevices = pgTable(
+  'trusted_devices',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    createdAt: createdAt(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: expiresAt(),
+    failedAttempts: integer('failed_attempts').notNull().default(0),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (table) => [
+    index('trusted_devices_user_id_idx').on(table.userId),
+    index('trusted_devices_expires_at_idx').on(table.expiresAt),
+  ],
+);
+
+/** Single-use invitation links (ADR-0010). `email`, when set, restricts who may accept. */
+export const invitations = pgTable(
+  'invitations',
+  {
+    id: uuid('id').primaryKey(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    role: membershipRole('role').notNull(),
+    email: citext('email'),
+    tokenHash: text('token_hash').notNull().unique(),
+    invitedBy: uuid('invited_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    expiresAt: expiresAt(),
+    acceptedBy: uuid('accepted_by').references(() => users.id, { onDelete: 'set null' }),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (table) => [
+    index('invitations_workspace_id_idx').on(table.workspaceId, table.id),
+    index('invitations_expires_at_idx').on(table.expiresAt),
+  ],
+);
+
+/**
+ * Days an audit event is kept. A trigger (drizzle/0003) rejects UPDATE and
+ * TRUNCATE, and DELETE of younger rows: change both together.
+ */
+export const AUDIT_RETENTION_DAYS = 365;
+
+/**
+ * Append-only audit trail (DESIGN §5.3). No foreign keys: events outlive the
+ * workspaces and users they describe.
+ */
+export const auditEvents = pgTable(
+  'audit_events',
+  {
+    id: uuid('id').primaryKey(),
+    workspaceId: uuid('workspace_id'),
+    actorId: uuid('actor_id'),
+    action: text('action').notNull(),
+    target: text('target'),
+    ip: inet('ip'),
+    userAgent: text('user_agent'),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index('audit_events_workspace_id_idx').on(table.workspaceId, table.id),
+    index('audit_events_created_at_idx').on(table.createdAt),
+  ],
+);
+
+/**
+ * Fixed-window counters of the rate limits shared by every API instance
+ * (ADR-0009). Created UNLOGGED by the migration: losing them on a crash is fine.
+ */
+export const rateLimits = pgTable(
+  'rate_limits',
+  {
+    key: text('key').primaryKey(),
+    hits: integer('hits').notNull(),
+    resetAt: timestamp('reset_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [index('rate_limits_reset_at_idx').on(table.resetAt)],
 );
 
 export type Role = (typeof ROLES)[number];

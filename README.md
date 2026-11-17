@@ -15,7 +15,7 @@
 </p>
 
 > [!NOTE]
-> **Built in public, phase by phase.** v0.1 delivers the domain: workspaces, members, projects and tasks with tenant isolation, database migrations and OpenAPI docs, on top of the tooling, container and CI foundation. Highlights and Architecture describe the v1.0 target; sections marked with a version describe what that release delivers — see the [roadmap](#roadmap).
+> **Built in public, phase by phase.** v0.2 adds authentication to the v0.1 domain: Ed25519 access tokens with rotating refresh tokens, brute-force protection, an append-only audit log and member invitations, on top of tenant-isolated workspaces, projects and tasks, migrations and OpenAPI docs. Highlights and Architecture describe the v1.0 target; sections marked with a version describe what that release delivers — see the [roadmap](#roadmap).
 
 ---
 
@@ -90,12 +90,20 @@ Requirements: Docker + Compose v2. For development without Docker: Node 24 and p
 git clone https://github.com/caiodassumpcao/secure-api-pipeline.git
 cd secure-api-pipeline
 cp .env.example .env                 # local development values
+pnpm keys:generate                   # Ed25519 key pair for access tokens, in keys/ (git-ignored)
 docker compose up -d --build --wait  # postgres, one-shot migrate, api; ports bound to 127.0.0.1
 curl localhost:3000/health/ready     # {"status":"ok","checks":{"database":"ok","migrations":"ok"}}
 open http://localhost:3000/docs      # OpenAPI UI (document at /openapi.json)
 ```
 
-The `migrate` service applies the SQL migrations and exits; the API starts only if it succeeded, and `/health/ready` stays 503 until the database has the schema the build expects. Until v0.2 adds authentication, `/v1` routes answer 401 outside the test environment; from v0.2, `pnpm keys:generate` creates the development Ed25519 key pair.
+The `migrate` service applies the SQL migrations and exits; the API starts only if it succeeded, and `/health/ready` stays 503 until the database has the schema the build expects. The signing keys reach the API as Compose secrets. Without Node, create them with OpenSSL instead of `pnpm keys:generate`:
+
+```bash
+mkdir -p keys && openssl genpkey -algorithm ed25519 -out keys/jwt-private.pem
+openssl pkey -in keys/jwt-private.pem -pubout -out keys/jwt-public.pem
+```
+
+The container runs as uid 1000: on Linux, if your uid differs, make these development keys readable by it (`chmod 644 keys/jwt-private.pem`).
 
 With local observability (Grafana, Prometheus, Tempo, Loki) — _v0.3_:
 
@@ -106,10 +114,8 @@ open http://localhost:3001         # Grafana
 
 ### Try it
 
-_Available from v0.2._
-
 ```bash
-# Register and log in
+# Register (a personal workspace comes with the account) and log in
 curl -s localhost:3000/v1/auth/register -H 'content-type: application/json' \
   -d '{"email":"ana@example.com","password":"correct-horse-battery-staple","name":"Ana"}'
 
@@ -117,22 +123,31 @@ TOKEN=$(curl -s -c cookies.txt localhost:3000/v1/auth/login -H 'content-type: ap
   -d '{"email":"ana@example.com","password":"correct-horse-battery-staple"}' | jq -r .accessToken)
 
 curl -s localhost:3000/v1/me -H "authorization: Bearer $TOKEN"
+
+# 15 minutes later: a new access token from the refresh cookie, which rotates
+TOKEN=$(curl -s -b cookies.txt -c cookies.txt -X POST localhost:3000/v1/auth/refresh | jq -r .accessToken)
+
+# Invite someone: share the single-use token, they accept it once logged in
+WORKSPACE_ID=$(curl -s localhost:3000/v1/me -H "authorization: Bearer $TOKEN" | jq -r '.memberships[0].workspaceId')
+curl -s localhost:3000/v1/workspaces/$WORKSPACE_ID/invitations -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"role":"member"}'
 ```
 
 ## API overview
 
-Workspace, member, project and task endpoints are available since v0.1 (identity comes from a test-only stub until v0.2); auth, `/v1/me` and the audit log arrive in v0.2. The full reference is the OpenAPI document served at `/docs`.
+Every `/v1` route but registration, login, refresh and logout takes an access token (`Authorization: Bearer`). The full reference is the OpenAPI document served at `/docs`.
 
-| Resource   | Endpoints                                                                               |
-| ---------- | --------------------------------------------------------------------------------------- |
-| Auth       | `POST /v1/auth/register` · `login` · `refresh` · `logout` _(v0.2)_                      |
-| Me         | `GET /v1/me` _(v0.2)_                                                                   |
-| Workspaces | `/v1/workspaces[/:wsId]`                                                                |
-| Members    | `/v1/workspaces/:wsId/members[/:userId]`                                                |
-| Projects   | `/v1/workspaces/:wsId/projects[/:projectId]` (`DELETE` archives)                        |
-| Tasks      | `/v1/workspaces/:wsId/projects/:projectId/tasks` · `/v1/workspaces/:wsId/tasks/:taskId` |
-| Audit      | `GET /v1/workspaces/:wsId/audit-events` _(v0.2)_                                        |
-| Health     | `/health/live` · `/health/ready`                                                        |
+| Resource    | Endpoints                                                                               |
+| ----------- | --------------------------------------------------------------------------------------- |
+| Auth        | `POST /v1/auth/register` · `login` · `refresh` · `logout`                               |
+| Me          | `GET /v1/me`                                                                            |
+| Workspaces  | `/v1/workspaces[/:wsId]`                                                                |
+| Members     | `/v1/workspaces/:wsId/members[/:userId]` (read, change role, remove)                    |
+| Invitations | `/v1/workspaces/:wsId/invitations[/:invitationId]` · `POST /v1/invitations/accept`      |
+| Projects    | `/v1/workspaces/:wsId/projects[/:projectId]` (`DELETE` archives)                        |
+| Tasks       | `/v1/workspaces/:wsId/projects/:projectId/tasks` · `/v1/workspaces/:wsId/tasks/:taskId` |
+| Audit       | `GET /v1/workspaces/:wsId/audit-events`                                                 |
+| Health      | `/health/live` · `/health/ready`                                                        |
 
 Lists use cursor pagination (`?limit=` 1–100 and the opaque `nextCursor`); task lists filter by `status`, `priority` and `assigneeId`. Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details and always include a `traceId` — see the [problem types](docs/problems.md).
 
@@ -145,11 +160,11 @@ Lists use cursor pagination (`?limit=` 1–100 and the opaque `nextCursor`); tas
 | Create / update tasks                |  ✅   |       ✅        |    ✅    |   —    |
 | Delete tasks                         |  ✅   |       ✅        | own only |   —    |
 | Manage projects, edit workspace      |  ✅   |       ✅        |    —     |   —    |
-| Manage members                       |  ✅   | ✅ (not owners) |    —     |   —    |
-| Read audit log _(v0.2)_              |  ✅   |       ✅        |    —     |   —    |
+| Manage members, invitations          |  ✅   | ✅ (not owners) |    —     |   —    |
+| Read audit log                       |  ✅   |       ✅        |    —     |   —    |
 | Delete workspace, transfer ownership |  ✅   |        —        |    —     |   —    |
 
-Callers outside a workspace get 404 for everything in it, as if it did not exist. Every role × action available today is tested over HTTP ([ADR-0005](docs/adr/0005-tenant-isolation-at-repository-layer.md)).
+Callers outside a workspace get 404 for everything in it, as if it did not exist. Every role × action is tested over HTTP with real access tokens ([ADR-0005](docs/adr/0005-tenant-isolation-at-repository-layer.md)).
 
 ## Verify a release image
 
@@ -169,7 +184,8 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 
 - Reporting a vulnerability: [`SECURITY.md`](SECURITY.md)
 - Security design and controls: [`docs/DESIGN.md` §5](docs/DESIGN.md#5-security-design)
-- Threat model: [`docs/threat-model.md`](docs/threat-model.md) — residual risks today, full STRIDE model in v0.2
+- Threat model: [`docs/threat-model.md`](docs/threat-model.md) — data flows, STRIDE per component, personal data and retention, residual risks
+- Authentication: [ADR-0004](docs/adr/0004-token-strategy.md) tokens · [ADR-0009](docs/adr/0009-brute-force-protection.md) brute force · [ADR-0010](docs/adr/0010-member-invitations.md) invitations
 - Security pipeline: `docs/security-pipeline.md` _(v0.4)_
 
 ## Part of a platform
@@ -185,7 +201,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 
 - [x] Foundation — tooling, config, health, CI
 - [x] **v0.1** — Domain, data model, CRUD, tenant isolation, OpenAPI
-- [ ] **v0.2** — Authentication, rate limits, audit log, threat model
+- [x] **v0.2** — Authentication, brute-force protection, audit log, invitations, threat model
 - [ ] **v0.3** — OpenTelemetry traces, metrics and correlated logs
 - [ ] **v0.4** — DevSecOps pipeline: scanners, SBOM, signing, provenance, DAST
 - [ ] **v1.0** — Verified deploys with automatic rollback
@@ -204,6 +220,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 ```bash
 corepack enable && pnpm install   # also installs the git hooks
 cp .env.example .env
+pnpm keys:generate                # development signing keys (keys/, git-ignored)
 docker compose up -d postgres     # database for local development
 pnpm db:migrate                   # apply the SQL migrations to DATABASE_URL
 pnpm dev                          # watch mode, http://localhost:3000 (docs at /docs)

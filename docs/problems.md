@@ -38,11 +38,11 @@ Responses never contain stack traces, SQL or internal hostnames. Server errors a
 
 ## `unauthorized`
 
-**401** — The request carries no valid credentials. The response includes a `WWW-Authenticate` challenge. Until authentication arrives (v0.2), every `/v1` route answers 401 outside the test environment.
+**401** — The request carries no valid credentials: the access token is missing, expired, or not one this API issued. The `WWW-Authenticate` challenge says `error="invalid_token"` when a token was sent: refresh it (`POST /v1/auth/refresh`) or log in again.
 
 ## `forbidden`
 
-**403** — You are a member of the workspace, but your role does not allow the action (see the [permission matrix](DESIGN.md#21-permission-matrix)). Callers outside the workspace get [`not-found`](#not-found) instead.
+**403** — You are a member of the workspace, but your role does not allow the action (see the [permission matrix](DESIGN.md#21-permission-matrix)). Callers outside the workspace get [`not-found`](#not-found) instead. Also returned by refresh and logout for cross-site requests (`Sec-Fetch-Site: cross-site`, or an `Origin` that is neither the API's nor in `CORS_ORIGINS`).
 
 ## `not-found`
 
@@ -50,7 +50,7 @@ Responses never contain stack traces, SQL or internal hostnames. Server errors a
 
 ## `conflict`
 
-**409** — The request conflicts with the current state of the resource: the slug is already in use, the user is already a member, the change would leave a workspace without an owner, or the task belongs to an archived project. Retrying the same request will not succeed until that state changes.
+**409** — The request conflicts with the current state of the resource: an account already uses the email address, the slug is already in use, the user is already a member, the change would leave a workspace without an owner, or the task belongs to an archived project. Retrying the same request will not succeed until that state changes.
 
 ## `payload-too-large`
 
@@ -59,6 +59,10 @@ Responses never contain stack traces, SQL or internal hostnames. Server errors a
 ## `unsupported-media-type`
 
 **415** — The `content-type` is not supported. Request bodies must be `application/json`; `text/plain` and other types are rejected.
+
+## `too-many-requests`
+
+**429** — Too many requests from this client (IP address, account or email address) in the current window. The `Retry-After` header gives the number of seconds to wait. Limits protect authentication and invitations in particular (ADR-0009).
 
 ## `internal-error`
 

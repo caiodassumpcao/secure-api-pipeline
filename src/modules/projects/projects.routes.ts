@@ -9,6 +9,7 @@ import {
   timestampSchema,
 } from '../../lib/schemas.ts';
 import { currentUser } from '../../plugins/authentication.ts';
+import { requestContext } from '../audit/audit.ts';
 import type { ProjectsService } from './projects.service.ts';
 
 export const projectSchema = z
@@ -132,7 +133,12 @@ export const projectRoutes: FastifyPluginCallbackZod<ProjectRoutesOptions> = (
       },
     },
     async (request, reply) => {
-      await service.archive(currentUser(request).id, request.params.wsId, request.params.projectId);
+      await service.archive(
+        currentUser(request).id,
+        request.params.wsId,
+        request.params.projectId,
+        requestContext(request),
+      );
       return reply.code(204).send(null);
     },
   );

@@ -69,12 +69,12 @@ export function createWorkspacesRepository(db: Executor) {
       return row;
     },
 
-    async delete(workspaceId: string): Promise<boolean> {
-      const deleted = await db
+    async delete(workspaceId: string): Promise<{ name: string; slug: string } | undefined> {
+      const [deleted] = await db
         .delete(workspaces)
         .where(eq(workspaces.id, workspaceId))
-        .returning({ id: workspaces.id });
-      return deleted.length > 0;
+        .returning({ name: workspaces.name, slug: workspaces.slug });
+      return deleted;
     },
 
     /**

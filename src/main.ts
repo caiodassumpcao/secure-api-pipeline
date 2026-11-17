@@ -1,14 +1,13 @@
 import { buildApp } from './app.ts';
-import { loadConfigOrExit } from './config/load-or-exit.ts';
+import { loadConfigOrExit, loadSigningKeysOrExit } from './config/load-or-exit.ts';
 import { createDatabase } from './db/database.ts';
 import { latestMigration } from './db/migrations.ts';
+import { runCleanup, scheduleCleanup } from './jobs/cleanup.ts';
 import { createLogger } from './lib/logger.ts';
+import { createRateLimiter } from './lib/rate-limiter.ts';
 import { registerGracefulShutdown } from './lib/shutdown.ts';
-import {
-  createTestAuthenticator,
-  denyAllAuthenticator,
-  type Authenticator,
-} from './plugins/authentication.ts';
+import { createPasswordHasher } from './modules/auth/password.ts';
+import { createTokenService } from './modules/auth/tokens.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -16,17 +15,26 @@ const config = loadConfigOrExit();
 const logger = createLogger(config.log);
 const database = createDatabase(config.database, logger, { expectedMigration: latestMigration() });
 
-let authenticate: Authenticator = denyAllAuthenticator;
-if (config.env === 'test') {
-  authenticate = createTestAuthenticator(config.env);
-  logger.warn(
-    'test authentication stub enabled: callers are identified by the x-test-user-id header',
-  );
-}
+const keys = await loadSigningKeysOrExit(config, logger);
+const tokens = createTokenService({
+  keys,
+  issuer: config.jwt.issuer,
+  audience: config.jwt.audience,
+});
 
-const app = await buildApp({ logger, database, authenticate, docs: config.docs });
+const app = await buildApp({
+  logger,
+  database,
+  auth: { tokens, passwords: createPasswordHasher() },
+  docs: config.docs,
+  limits: { limiter: createRateLimiter(database.db), global: true },
+  http: { corsOrigins: config.cors.origins, trustProxy: config.trustProxy },
+});
+
+const cleanup = scheduleCleanup(() => runCleanup(database.db), logger);
 
 app.addHook('onClose', async () => {
+  cleanup.stop();
   await database.close();
 });
 

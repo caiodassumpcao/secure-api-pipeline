@@ -5,8 +5,12 @@ import { buildTestApp } from '../../helpers/test-app.ts';
 interface OpenApiDocument {
   openapi: string;
   info: { version: string };
-  paths: Record<string, Record<string, { responses: Record<string, { content?: object }> }>>;
-  components: { schemas: Record<string, unknown> };
+  paths: Record<
+    string,
+    Record<string, { responses: Record<string, { content?: object }>; security?: unknown }>
+  >;
+  components: { schemas: Record<string, unknown>; securitySchemes?: unknown };
+  security?: unknown;
 }
 
 describe('OpenAPI document', () => {
@@ -25,8 +29,17 @@ describe('OpenAPI document', () => {
     expect(Object.keys(document.paths).sort()).toEqual([
       '/health/live',
       '/health/ready',
+      '/v1/auth/login',
+      '/v1/auth/logout',
+      '/v1/auth/refresh',
+      '/v1/auth/register',
+      '/v1/invitations/accept',
+      '/v1/me',
       '/v1/workspaces',
       '/v1/workspaces/{wsId}',
+      '/v1/workspaces/{wsId}/audit-events',
+      '/v1/workspaces/{wsId}/invitations',
+      '/v1/workspaces/{wsId}/invitations/{invitationId}',
       '/v1/workspaces/{wsId}/members',
       '/v1/workspaces/{wsId}/members/{userId}',
       '/v1/workspaces/{wsId}/projects',
@@ -37,6 +50,12 @@ describe('OpenAPI document', () => {
     expect(Object.keys(document.components.schemas)).toEqual(
       expect.arrayContaining(['Workspace', 'Member', 'Project', 'Task']),
     );
+    expect(document.components.securitySchemes).toEqual({
+      bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+      refreshCookie: { type: 'apiKey', in: 'cookie', name: '__Secure-refresh' },
+    });
+    expect(document.security).toEqual([{ bearerAuth: [] }]);
+    expect(document.paths['/health/live']?.get?.security).toEqual([]);
   });
 
   it('documents errors as RFC 9457 problem details', async () => {

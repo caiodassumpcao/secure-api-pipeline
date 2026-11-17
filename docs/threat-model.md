@@ -1,30 +1,139 @@
 # Threat model
 
-> Status: **started in v0.1** with the residual risks known so far. The full model (STRIDE per component for client → Nginx → API → PostgreSQL and CI/CD → GHCR → VPS, data-flow diagram, trust boundaries, assets) arrives with v0.2, as planned in [DESIGN §5.2](DESIGN.md#52-threat-model). Controls in place are listed in [DESIGN §5.1](DESIGN.md#51-controls).
+> Status: **v0.2**. Covers the API and its data as built today, plus the delivery chain the roadmap adds (CI/CD in v0.4, deployment in v1.0), whose controls are marked with the version that brings them. Controls are summarized in [DESIGN §5.1](DESIGN.md#51-controls); decisions are in the [ADRs](adr/).
+
+## Data flow and trust boundaries
+
+```mermaid
+flowchart LR
+    subgraph Internet["Internet (untrusted)"]
+        C[Client<br/>browser · CLI]
+    end
+    subgraph VPS["VPS (server-hardening-kit)"]
+        N[Nginx<br/>TLS · HSTS · rate limit<br/>v1.0]
+        subgraph Docker["Docker network"]
+            A[API<br/>Fastify · Node 24]
+            M[migrate<br/>one-shot]
+            P[(PostgreSQL)]
+        end
+        S[[Secrets<br/>JWT keys · DB URL]]
+    end
+    subgraph GitHub["GitHub (trusted supply chain)"]
+        CI[Actions<br/>v0.4]
+        R[GHCR<br/>signed images · v0.4]
+    end
+    C -- "HTTPS: credentials, tokens, cookies" --> N
+    N -- "HTTP + X-Forwarded-For" --> A
+    A -- "SQL, parameterized" --> P
+    M -- "DDL" --> P
+    S -. "files" .-> A
+    CI -- "build, sign, push" --> R
+    R -- "pull, cosign verify · v1.0" --> VPS
+```
+
+Trust boundaries: **Internet → Nginx** (everything from the client is hostile input), **Nginx → API** (only the proxies listed in `TRUST_PROXY` may report the client IP), **API → PostgreSQL** (one database role today, see RR-5), **GitHub → VPS** (only images signed by this repository's workflows are deployed, v1.0).
+
+## Assets
+
+| Asset                                | Why it matters                                     | Where                                           |
+| ------------------------------------ | -------------------------------------------------- | ----------------------------------------------- |
+| Tenant data (projects, tasks)        | Confidentiality and integrity between workspaces   | PostgreSQL, scoped by `workspace_id` (ADR-0005) |
+| Credentials                          | Account takeover                                   | `users.password_hash` (argon2id)                |
+| Sessions                             | Account takeover without the password              | Refresh-token families (SHA-256 only), cookies  |
+| Access-token signing key             | Forging any user's identity                        | Ed25519 private key, Docker secret              |
+| Invitation links, device cookies     | Joining a workspace; bypassing the account lockout | SHA-256 only in the database                    |
+| Audit trail                          | Investigating incidents; holds IPs (personal data) | `audit_events`, append-only, 365 days           |
+| Release artifacts and CI credentials | Shipping malicious code                            | GHCR, GitHub App key, Actions secrets (v0.4)    |
+
+## STRIDE per component
+
+### API
+
+| Threat                     | Scenario                                                     | Mitigations                                                                                                                                                                                                              |
+| -------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **S**poofing               | Credential stuffing, brute force                             | argon2id; rate limits per IP and per email, shared by instances; lockout after 10 failures for clients without a device cookie (ADR-0009); identical 401 and argon2 cost for unknown, wrong and locked                   |
+|                            | Stolen refresh token                                         | Rotation on every use; reuse of an exchanged token revokes the whole session and is audited; 7-day idle and 30-day absolute lifetime; `HttpOnly`, `SameSite=Strict`, `__Secure-` cookie limited to `/v1/auth` (ADR-0004) |
+|                            | Forged or replayed access token                              | Ed25519 signature, algorithm, `typ`, issuer and audience pinned; 15-minute lifetime; the key id selects among the current and previous public keys only                                                                  |
+|                            | Spoofed client IP to evade limits                            | `X-Forwarded-For` ignored unless `TRUST_PROXY` names the proxy; `true` is refused                                                                                                                                        |
+| **T**ampering              | Mass assignment, injection                                   | Strict request schemas; Drizzle with bound parameters only                                                                                                                                                               |
+|                            | Cross-tenant writes (IDOR)                                   | Workspace-scoped repositories, service authorization, composite foreign keys; matrix and cross-tenant suites (ADR-0005)                                                                                                  |
+|                            | CSRF on the refresh cookie                                   | `SameSite=Strict`, cookie path, and refresh and logout refuse `Sec-Fetch-Site: cross-site` and foreign `Origin`s                                                                                                         |
+| **R**epudiation            | "I did not remove that member"                               | Audit events in the same transaction as the change, with actor, IP and user agent; append-only trigger                                                                                                                   |
+| **I**nformation disclosure | Learning whether an email has an account                     | Login answers alike for every failure; invitations look no account up (ADR-0010); registration still discloses it (RR-3)                                                                                                 |
+|                            | Learning that another tenant's resource exists               | Non-members get 404, never 403                                                                                                                                                                                           |
+|                            | Secrets in logs, errors or the database                      | Log redaction (headers, cookies, tokens, passwords, query parameters, database errors), tested over full flows; RFC 9457 errors without internals; opaque tokens stored as SHA-256 only                                  |
+|                            | Responses cached by intermediaries                           | `Cache-Control: no-store`                                                                                                                                                                                                |
+| **D**enial of service      | Request floods, expensive hashing                            | 600 requests/min per IP before routing; stricter limits on authentication and invitations; argon2 bounded by the libuv pool; body limit, timeouts, pagination caps                                                       |
+|                            | Locking a victim out of their account                        | The lockout never applies to a client with a valid device cookie (ADR-0009)                                                                                                                                              |
+| **E**levation of privilege | Admin granting themselves ownership, member managing members | Permission matrix encoded once and tested for every role and action; only owners grant, change or revoke `owner`, invitations included                                                                                   |
+
+### PostgreSQL
+
+| Threat                                    | Mitigations                                                                                                         |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Tampering with or erasing the audit trail | A trigger rejects UPDATE, TRUNCATE and DELETE of events younger than 365 days; the owner role can disable it (RR-5) |
+| Exposure of the database port             | Compose publishes it on `127.0.0.1` only; the production Compose file does not publish it (v1.0)                    |
+| Theft of a backup                         | Only hashes of passwords and tokens; backups encrypted by `drkit` (v1.0)                                            |
+
+### Nginx and the host (v1.0)
+
+| Threat                   | Mitigations                                                                                                      |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Downgrade, eavesdropping | TLS only, HSTS                                                                                                   |
+| Floods                   | `limit_req` in front of the API's own limits                                                                     |
+| Host compromise          | `server-hardening-kit`; API container read-only, non-root, no capabilities, `no-new-privileges`, resource limits |
+
+### CI/CD and registry (v0.4, v1.0)
+
+| Threat                      | Mitigations                                                                                                                                                 |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Malicious dependency        | Lockfile, 3-day release age, no install scripts unless approved, overrides for vulnerable transitive versions, Dependabot, `pnpm audit`, OSV-Scanner (v0.4) |
+| Tampered workflow or action | Actions pinned by SHA, least-privilege tokens, protected `main` (signed commits, required checks, no bypass)                                                |
+| Leaked release credentials  | Release PRs use a short-lived GitHub App token limited to three permissions (ADR-0003)                                                                      |
+| Tampered image              | SBOM, cosign keyless signature and SLSA provenance (v0.4), verified on the server before deploying (v1.0)                                                   |
+
+## Personal data and retention
+
+The audit trail stores the client **IP address** and **user agent** of each event, which are personal data, besides actor and target ids. Events are kept **365 days**, then deleted by the hourly cleanup job: long enough to investigate an incident discovered late, and above the six months the Brazilian Marco Civil da Internet (art. 15) requires for application access records, while staying bounded as data minimization asks (LGPD art. 6). The database enforces it: the append-only trigger only lets rows older than 365 days be deleted. Only owners and admins of a workspace read its events; authentication events, which have no workspace, are not exposed by the API. Failed logins for unknown accounts record no email address.
+
+Other personal data: the email and name of each account. Device cookies, sessions, invitations and rate-limit counters are deleted when they expire; rate-limit keys are hashes, never addresses or emails.
 
 ## Residual risks
 
-Risks that are known and accepted for now, each with the version that revisits it.
+| ID   | Risk                                                | Status                                 | Revisit |
+| ---- | --------------------------------------------------- | -------------------------------------- | ------- |
+| RR-1 | Account enumeration through member addition         | **Resolved in v0.2** (ADR-0010)        | —       |
+| RR-2 | Test identity stub trusts a request header          | **Resolved in v0.2** (stub removed)    | —       |
+| RR-3 | Registration discloses that an email has an account | Accepted                               | —       |
+| RR-4 | Email addresses are not verified                    | Accepted (no email delivery, non-goal) | Future  |
+| RR-5 | One database role: the API owns its tables          | Accepted until v1.0                    | v1.0    |
+| RR-6 | Access tokens outlive logout by up to 15 minutes    | Accepted (ADR-0004)                    | —       |
+| RR-7 | The global per-IP limit is per instance             | Accepted                               | v1.0    |
 
-| ID   | Risk                                        | Status                    | Revisit |
-| ---- | ------------------------------------------- | ------------------------- | ------- |
-| RR-1 | Account enumeration through member addition | Accepted                  | v0.2    |
-| RR-2 | Test identity stub trusts a request header  | Accepted, removed in v0.2 | v0.2    |
+### RR-1. Account enumeration through member addition — resolved
 
-### RR-1. Account enumeration through member addition
+Adding a member by email answered 404 for an address without an account, and added an existing account without its consent. v0.2 replaces it with invitation links (ADR-0010): creating an invitation looks no account up, and the invitee must accept it while logged in. Removing `POST /members` is a breaking change of v0.2.
 
-- **Where:** `POST /v1/workspaces/:wsId/members` (add an existing account by email).
-- **Threat:** the endpoint answers **404** when no account uses the address and **201** (or **409** for an existing member) otherwise. Any authenticated user can create a workspace, becoming its owner, and use it to probe which email addresses have an account. A successful probe also returns the account's name and adds that account to the prober's workspace without its consent.
-- **Impact:** disclosure that a person has an account (privacy), input for credential stuffing and phishing, unwanted workspace memberships.
-- **Why accepted in v0.1:** there is no registration or real authentication yet; outside the test environment every `/v1` route answers 401, so the endpoint cannot be reached. Uniform responses need an invitation flow, which v0.1 does not have.
-- **Planned for v0.2:**
-  - a per-user rate limit on `POST /members` (on top of the per-IP limit), so probing at scale is impractical;
-  - the `member.added` audit event (DESIGN §5.3), so probing and unwanted additions are traceable;
-  - an evaluation of an invitation flow: the invitee accepts a pending invitation, and the endpoint answers the same way whether or not the address has an account. The decision will be recorded in an ADR.
+### RR-2. Test identity stub — resolved
 
-### RR-2. Test identity stub trusts a request header
+The `x-test-user-id` stub of v0.1 is deleted; every environment authenticates with access tokens, and the test suites use real tokens.
 
-- **Where:** `src/plugins/authentication.ts` (`createTestAuthenticator`).
-- **Threat:** under `NODE_ENV=test` the caller is whoever the `x-test-user-id` header names. A deployment running with that value would let anyone act as any user.
-- **Mitigations:** the stub cannot be constructed outside `NODE_ENV=test` (it throws), the API logs a warning when it is enabled, and every other environment uses an authenticator that rejects all requests. Unit tests cover the guard and both authenticators.
-- **Planned for v0.2:** JWT authentication replaces the stub, and the stub is deleted.
+### RR-3. Registration discloses existing accounts
+
+`POST /v1/auth/register` answers 409 when the address is taken. A uniform answer needs an email to the address owner, which the API cannot send. Mitigations: the password is hashed before the check, so the timing is the same, and registrations are limited to 5 per hour and IP.
+
+### RR-4. Unverified email addresses
+
+Anyone can register any address. The consequences are limited: invitations do not trust the address alone (the link is the proof, ADR-0010), and no feature sends email. Email verification belongs with an email-delivery service, out of scope for v1.
+
+### RR-5. Database roles (Phase 5)
+
+The API and the migrations use the same PostgreSQL role, which owns the tables: a compromised API process could disable the audit trigger, then alter or delete events. **Planned for Phase 5** (DESIGN §13): a migration role that owns the schema, and a runtime role with only what the API needs, without `UPDATE` or `DELETE` on `audit_events`; the cleanup job then deletes expired events through a dedicated role or a `SECURITY DEFINER` function limited to them.
+
+### RR-6. Access tokens after logout
+
+Logout revokes the session, so no new access token can be obtained, but tokens already issued stay valid until they expire, at most 15 minutes later. A deny list would make every request depend on shared state; the short lifetime is the accepted trade-off (ADR-0004).
+
+### RR-7. Per-instance global limit
+
+The coarse limit of 600 requests per minute lives in each instance's memory, so N instances allow N times as much. The limits that matter for security (authentication, invitations) are shared through PostgreSQL, and Nginx adds its own limit in v1.0.
