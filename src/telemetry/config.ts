@@ -16,6 +16,13 @@ export interface TelemetryConfig {
   readonly otlpEndpoint: string | undefined;
   /** Root traces kept, 0–1. Incoming trace context is never trusted (ADR-0006). */
   readonly sampleRatio: number;
+  readonly metrics: {
+    /** Interface of the internal `/metrics` port; the image sets 0.0.0.0. */
+    readonly host: string;
+    readonly port: number;
+    /** How often metrics are pushed over OTLP, when an endpoint is set. */
+    readonly exportIntervalMs: number;
+  };
 }
 
 const telemetryEnvSchema = z
@@ -41,8 +48,16 @@ const telemetryEnvSchema = z
       .min(0, 'must be a number between 0 and 1')
       .max(1, 'must be a number between 0 and 1')
       .default(DEFAULT_SAMPLE_RATIO),
+    OTEL_METRIC_EXPORT_INTERVAL: z.coerce.number().int().min(100).default(60_000),
+    METRICS_HOST: z.string().min(1).default('127.0.0.1'),
+    METRICS_PORT: z.coerce.number().int().min(1).max(65_535).default(9464),
+    PORT: z.coerce.number().int().optional(),
   })
-  .loose();
+  .loose()
+  .refine((env) => env.PORT === undefined || env.PORT !== env.METRICS_PORT, {
+    path: ['METRICS_PORT'],
+    message: 'must differ from PORT: metrics are never served on the public port',
+  });
 
 /**
  * Telemetry settings, read by the `--import` entry point before the app. The
@@ -69,5 +84,10 @@ export function loadTelemetryConfig(env: NodeJS.ProcessEnv = process.env): Telem
     environment: parsed.NODE_ENV,
     otlpEndpoint: parsed.OTEL_EXPORTER_OTLP_ENDPOINT,
     sampleRatio: parsed.OTEL_TRACES_SAMPLER_ARG,
+    metrics: {
+      host: parsed.METRICS_HOST,
+      port: parsed.METRICS_PORT,
+      exportIntervalMs: parsed.OTEL_METRIC_EXPORT_INTERVAL,
+    },
   };
 }

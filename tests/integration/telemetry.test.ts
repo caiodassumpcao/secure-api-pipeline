@@ -281,3 +281,80 @@ describe('logs', () => {
     expect(record.attributes.user_id).toBe(line.user_id);
   });
 });
+
+describe('metrics', () => {
+  let receiver: OtlpReceiver;
+  let api: ApiProcess;
+  let exposition = '';
+
+  beforeAll(async () => {
+    receiver = await OtlpReceiver.start();
+    api = await startApiProcess({ DATABASE_URL: database.url, ...exportingTo(receiver) });
+    const email = `measured-${Date.now()}@example.test`;
+    const { accessToken, workspaceId } = await signIn(api.baseUrl, email);
+    const headers = { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' };
+    const project = await fetch(`${api.baseUrl}/v1/workspaces/${workspaceId}/projects`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Measured' }),
+    });
+    const { id: projectId } = (await project.json()) as { id: string };
+    await fetch(`${api.baseUrl}/v1/workspaces/${workspaceId}/projects/${projectId}/tasks`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ title: 'Count me' }),
+    });
+    await fetch(`${api.baseUrl}/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password: 'not the right one' }),
+    });
+    await fetch(`${api.baseUrl}/v1/workspaces/${workspaceId}`, { headers });
+    await fetch(`${api.baseUrl}/v1/workspaces/${projectId}/no/such/route`);
+    exposition = await (await fetch(api.metricsUrl)).text();
+  });
+
+  afterAll(async () => {
+    await api.stop();
+    await receiver.stop();
+  });
+
+  const series = (name: string) => exposition.split('\n').filter((line) => line.startsWith(name));
+
+  it('expose request latency by route template on the internal port', () => {
+    // The OTel JS Prometheus exporter states the unit in metadata, not in the name.
+    expect(exposition).toContain('# UNIT http_server_request_duration s');
+    expect(series('http_server_request_duration_bucket').join('\n')).toContain(
+      'http_route="/v1/workspaces/:wsId"',
+    );
+  });
+
+  it('expose the business counters, the pool and the runtime', () => {
+    expect(series('auth_login_failures_total').join('\n')).toMatch(/reason="wrong_password".* 1$/m);
+    expect(series('tasks_created_total').join('\n')).toMatch(/ 1$/m);
+    expect(series('db_client_connection_count').length).toBeGreaterThan(0);
+    expect(series('nodejs_eventloop_delay').length).toBeGreaterThan(0);
+  });
+
+  it('never label a series with an id or a raw path', () => {
+    const labelValues = [...exposition.matchAll(/="([^"]*)"/g)].map((match) => match[1] ?? '');
+
+    expect(labelValues.filter((value) => /[0-9a-f]{8}-[0-9a-f]{4}-/.test(value))).toEqual([]);
+    expect(labelValues.filter((value) => value.includes('/no/such/route'))).toEqual([]);
+  });
+
+  it('are not served on the public port', async () => {
+    expect((await fetch(`${api.baseUrl}/metrics`)).status).toBe(404);
+  });
+
+  it('are also pushed over OTLP when an endpoint is set', async () => {
+    const expected = ['http.server.request.duration', 'auth.login.failures', 'tasks.created'];
+
+    const names = await receiver.waitFor(() => {
+      const found = receiver.metricNames();
+      return expected.every((name) => found.includes(name)) ? found : undefined;
+    });
+
+    expect(names).toEqual(expect.arrayContaining(expected));
+  });
+});

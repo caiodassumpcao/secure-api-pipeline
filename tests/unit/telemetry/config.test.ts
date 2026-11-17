@@ -20,6 +20,7 @@ describe('loadTelemetryConfig', () => {
       environment: 'development',
       otlpEndpoint: undefined,
       sampleRatio: DEFAULT_SAMPLE_RATIO,
+      metrics: { host: '127.0.0.1', port: 9464, exportIntervalMs: 60_000 },
     });
     expect(DEFAULT_SAMPLE_RATIO).toBeLessThanOrEqual(0.1);
   });
@@ -32,6 +33,9 @@ describe('loadTelemetryConfig', () => {
       OTEL_EXPORTER_OTLP_ENDPOINT: 'http://otel-lgtm:4318',
       OTEL_TRACES_SAMPLER_ARG: '1.0',
       OTEL_RESOURCE_ATTRIBUTES: '',
+      OTEL_METRIC_EXPORT_INTERVAL: '15000',
+      METRICS_HOST: '0.0.0.0',
+      METRICS_PORT: '9100',
     });
 
     expect(config).toEqual({
@@ -40,6 +44,7 @@ describe('loadTelemetryConfig', () => {
       environment: 'production',
       otlpEndpoint: 'http://otel-lgtm:4318',
       sampleRatio: 1,
+      metrics: { host: '0.0.0.0', port: 9100, exportIntervalMs: 15_000 },
     });
   });
 
@@ -57,6 +62,10 @@ describe('loadTelemetryConfig', () => {
       'OTEL_EXPORTER_OTLP_ENDPOINT: must be an http:// or https:// URL',
     ],
     [{ OTEL_SDK_DISABLED: 'yes' }, 'OTEL_SDK_DISABLED: must be true or false'],
+    [
+      { PORT: '3000', METRICS_PORT: '3000' },
+      'METRICS_PORT: must differ from PORT: metrics are never served on the public port',
+    ],
     [
       { OTEL_TRACES_SAMPLER: 'always_on' },
       'OTEL_TRACES_SAMPLER: is not supported: the sampler is parent-based trace-id ratio; set OTEL_TRACES_SAMPLER_ARG',

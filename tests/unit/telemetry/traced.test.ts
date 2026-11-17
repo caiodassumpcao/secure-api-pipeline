@@ -2,25 +2,20 @@ import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { DrizzleQueryError } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HttpProblem, ProblemTypes } from '../../../src/lib/problem.ts';
-import { activeTelemetry, startTelemetry, type Telemetry } from '../../../src/telemetry/sdk.ts';
+import { activeTelemetry, type Telemetry } from '../../../src/telemetry/sdk.ts';
 import { instrumentService, traced } from '../../../src/telemetry/traced.ts';
-import { CollectingSpanExporter, resetOpenTelemetry } from '../../helpers/telemetry.ts';
+import {
+  CollectingSpanExporter,
+  resetOpenTelemetry,
+  startTestTelemetry,
+} from '../../helpers/telemetry.ts';
 
 let exporter: CollectingSpanExporter;
 let telemetry: Telemetry;
 
 beforeEach(() => {
   exporter = new CollectingSpanExporter();
-  telemetry = startTelemetry(
-    {
-      enabled: true,
-      serviceName: 'test',
-      environment: 'test',
-      otlpEndpoint: undefined,
-      sampleRatio: 1,
-    },
-    { spanExporter: exporter },
-  );
+  telemetry = startTestTelemetry({ spanExporter: exporter });
 });
 
 afterEach(async () => {

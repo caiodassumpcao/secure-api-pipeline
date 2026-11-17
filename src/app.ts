@@ -31,6 +31,7 @@ import { registerOpenApi } from './plugins/openapi.ts';
 import { registerGlobalRateLimit } from './plugins/rate-limit.ts';
 import { generateRequestId, registerRequestIdHeader } from './plugins/request-id.ts';
 import { registerSecurity, trustProxyOption } from './plugins/security.ts';
+import type { AppMetrics } from './telemetry/metrics.ts';
 import { instrumentService } from './telemetry/traced.ts';
 
 /** Request body cap (DoS control, DESIGN §5.1). */
@@ -49,6 +50,8 @@ export interface AppDependencies {
   };
   /** Serve `/docs` and `/openapi.json` (off in production unless enabled). */
   readonly docs: { readonly enabled: boolean };
+  /** Business counters (no-ops without a meter provider). */
+  readonly metrics: AppMetrics;
   readonly limits: {
     /** Shared counters for the sensitive routes (PostgreSQL in production). */
     readonly limiter: RateLimiter;
@@ -67,7 +70,15 @@ export interface AppDependencies {
  * Creates the Fastify instance with all plugins and routes, without listening.
  * Tests use it with `app.inject()`; `main.ts` adds the process lifecycle.
  */
-export async function buildApp({ logger, database, auth, docs, limits, http }: AppDependencies) {
+export async function buildApp({
+  logger,
+  database,
+  auth,
+  docs,
+  metrics,
+  limits,
+  http,
+}: AppDependencies) {
   const app = Fastify({
     loggerInstance: logger,
     genReqId: generateRequestId,
@@ -98,7 +109,7 @@ export async function buildApp({ logger, database, auth, docs, limits, http }: A
 
   const authService = instrumentService(
     'auth',
-    createAuthService({ db: database.db, ...auth, limiter: limits.limiter }),
+    createAuthService({ db: database.db, ...auth, limiter: limits.limiter, metrics }),
   );
   await app.register(authRoutes, {
     prefix: '/v1/auth',
@@ -125,7 +136,7 @@ export async function buildApp({ logger, database, auth, docs, limits, http }: A
         service: instrumentService('projects', createProjectsService(database.db)),
       });
       await v1.register(taskRoutes, {
-        service: instrumentService('tasks', createTasksService(database.db)),
+        service: instrumentService('tasks', createTasksService(database.db, metrics)),
       });
       await v1.register(auditRoutes, {
         service: instrumentService('audit', createAuditService(database.db)),

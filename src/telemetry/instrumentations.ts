@@ -3,6 +3,7 @@ import type { Instrumentation } from '@opentelemetry/instrumentation';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { PgInstrumentation } from '@opentelemetry/instrumentation-pg';
 import { PinoInstrumentation } from '@opentelemetry/instrumentation-pino';
+import { RuntimeNodeInstrumentation } from '@opentelemetry/instrumentation-runtime-node';
 import { redactUrl } from '../lib/redact-url.ts';
 
 /** Probes and docs: frequent or static, not worth a trace or a metric series. */
@@ -63,5 +64,7 @@ export function createInstrumentations(options: { exportLogs: boolean }): Instru
     // Adds trace_id, span_id and trace_flags to every log line written in a
     // span, and sends the serialized (already redacted) lines over OTLP.
     new PinoInstrumentation({ disableLogSending: !options.exportLogs }),
+    // Event loop delay and utilization, heap, garbage collection.
+    new RuntimeNodeInstrumentation(),
   ];
 }

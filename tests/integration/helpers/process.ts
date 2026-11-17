@@ -36,6 +36,8 @@ function keyFiles(): Record<string, string> {
 
 export interface ApiProcess {
   readonly baseUrl: string;
+  /** The internal Prometheus endpoint. */
+  readonly metricsUrl: string;
   /** Every line the process wrote to stdout and stderr. */
   readonly output: string[];
   readonly child: ChildProcess;
@@ -50,6 +52,7 @@ export interface ApiProcess {
  */
 export async function startApiProcess(env: Record<string, string>): Promise<ApiProcess> {
   const port = await freePort();
+  const metricsPort = await freePort();
   const output: string[] = [];
   const child = spawn(
     process.execPath,
@@ -62,6 +65,7 @@ export async function startApiProcess(env: Record<string, string>): Promise<ApiP
         LOG_LEVEL: 'info',
         HOST: '127.0.0.1',
         PORT: String(port),
+        METRICS_PORT: String(metricsPort),
         ...keyFiles(),
         ...env,
       },
@@ -99,6 +103,7 @@ export async function startApiProcess(env: Record<string, string>): Promise<ApiP
 
   return {
     baseUrl: `http://127.0.0.1:${port}`,
+    metricsUrl: `http://127.0.0.1:${metricsPort}/metrics`,
     output,
     child,
     async stop() {

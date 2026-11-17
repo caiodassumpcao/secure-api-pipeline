@@ -9,6 +9,7 @@ import { createPasswordHasher } from '../../src/modules/auth/password.ts';
 import { createTestTokenService } from '../helpers/keys.ts';
 import { createTestDatabase, type TestDatabase } from './helpers/database.ts';
 import { unlimited } from '../../src/lib/rate-limiter.ts';
+import { createAppMetrics } from '../../src/telemetry/metrics.ts';
 
 let empty: TestDatabase;
 
@@ -26,6 +27,7 @@ async function ready(testDatabase: TestDatabase) {
     database: testDatabase.database,
     auth: { tokens: await createTestTokenService(), passwords: createPasswordHasher() },
     docs: { enabled: false },
+    metrics: createAppMetrics(),
     limits: { limiter: unlimited, global: false },
     http: { corsOrigins: [], trustProxy: false },
   });

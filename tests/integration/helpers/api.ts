@@ -11,6 +11,7 @@ import { createTestTokenService, generatePems } from '../../helpers/keys.ts';
 import type { LogCapture } from '../../helpers/log-capture.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
 import { createRateLimiter, unlimited } from '../../../src/lib/rate-limiter.ts';
+import { createAppMetrics } from '../../../src/telemetry/metrics.ts';
 
 export interface TestUser {
   readonly id: string;
@@ -77,6 +78,7 @@ export class TestApi {
       database: testDatabase.database,
       auth: { tokens, passwords: options.passwords ?? createPasswordHasher() },
       docs: { enabled: false },
+      metrics: createAppMetrics(),
       limits:
         options.rateLimits === true
           ? { limiter: createRateLimiter(testDatabase.database.db), global: true }

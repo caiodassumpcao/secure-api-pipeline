@@ -8,6 +8,7 @@ import { createRateLimiter } from './lib/rate-limiter.ts';
 import { registerGracefulShutdown } from './lib/shutdown.ts';
 import { createPasswordHasher } from './modules/auth/password.ts';
 import { createTokenService } from './modules/auth/tokens.ts';
+import { createAppMetrics } from './telemetry/metrics.ts';
 import { activeTelemetry } from './telemetry/sdk.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -28,6 +29,7 @@ const app = await buildApp({
   database,
   auth: { tokens, passwords: createPasswordHasher() },
   docs: config.docs,
+  metrics: createAppMetrics(),
   limits: { limiter: createRateLimiter(database.db), global: true },
   http: { corsOrigins: config.cors.origins, trustProxy: config.trustProxy },
 });

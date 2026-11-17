@@ -7,17 +7,12 @@ import {
 } from '@opentelemetry/api';
 import type { SpanExporter } from '@opentelemetry/sdk-trace';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { TelemetryConfig } from '../../../src/telemetry/config.ts';
-import { activeTelemetry, startTelemetry } from '../../../src/telemetry/sdk.ts';
-import { CollectingSpanExporter, resetOpenTelemetry } from '../../helpers/telemetry.ts';
-
-const config: TelemetryConfig = {
-  enabled: true,
-  serviceName: 'secure-api-test',
-  environment: 'test',
-  otlpEndpoint: undefined,
-  sampleRatio: 1,
-};
+import { activeTelemetry } from '../../../src/telemetry/sdk.ts';
+import {
+  CollectingSpanExporter,
+  resetOpenTelemetry,
+  startTestTelemetry,
+} from '../../helpers/telemetry.ts';
 
 afterEach(async () => {
   await activeTelemetry()?.shutdown(100);
@@ -29,7 +24,7 @@ const tracer = (): Tracer => trace.getTracer('test');
 describe('startTelemetry', () => {
   it('exports spans with the service resource', async () => {
     const exporter = new CollectingSpanExporter();
-    const telemetry = startTelemetry(config, { spanExporter: exporter });
+    const telemetry = startTestTelemetry({ spanExporter: exporter });
 
     tracer().startSpan('work').end();
     await telemetry.shutdown();
@@ -44,7 +39,7 @@ describe('startTelemetry', () => {
 
   it('still gives unsampled requests a trace id, for log correlation', async () => {
     const exporter = new CollectingSpanExporter();
-    const telemetry = startTelemetry({ ...config, sampleRatio: 0 }, { spanExporter: exporter });
+    const telemetry = startTestTelemetry({ spanExporter: exporter }, { sampleRatio: 0 });
 
     const span = tracer().startSpan('dropped');
     span.end();
@@ -56,7 +51,7 @@ describe('startTelemetry', () => {
   });
 
   it('creates spans without exporting them when no endpoint is set', () => {
-    startTelemetry(config);
+    startTestTelemetry();
 
     const span = tracer().startSpan('local');
 
@@ -66,7 +61,7 @@ describe('startTelemetry', () => {
   });
 
   it('never trusts trace context sent by clients', () => {
-    startTelemetry(config);
+    startTestTelemetry();
     const carrier = {
       traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
       baggage: 'role=admin',
@@ -83,7 +78,7 @@ describe('startTelemetry', () => {
       export: () => undefined, // never reports back
       shutdown: () => new Promise<void>(() => undefined),
     };
-    const telemetry = startTelemetry(config, { spanExporter: hanging });
+    const telemetry = startTestTelemetry({ spanExporter: hanging });
     tracer().startSpan('stuck').end();
 
     const started = Date.now();
