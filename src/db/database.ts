@@ -1,6 +1,14 @@
+import { drizzle, type NodePgDatabase, type NodePgQueryResultHKT } from 'drizzle-orm/node-postgres';
+import type { PgDatabase } from 'drizzle-orm/pg-core';
 import pg from 'pg';
 import type { Logger } from 'pino';
 import type { ReadinessProbe } from '../modules/health/health.routes.ts';
+import * as schema from './schema.ts';
+
+export type Db = NodePgDatabase<typeof schema>;
+
+/** The database or an open transaction: repositories accept either. */
+export type Executor = PgDatabase<NodePgQueryResultHKT, typeof schema>;
 
 export interface DatabaseConfig {
   readonly url: string;
@@ -8,12 +16,13 @@ export interface DatabaseConfig {
 
 export interface Database extends ReadinessProbe {
   readonly pool: pg.Pool;
+  readonly db: Db;
   close(): Promise<void>;
 }
 
 /**
- * PostgreSQL connection pool. Connections are opened lazily, so the API starts
- * (and reports not-ready) while the database is still coming up.
+ * PostgreSQL connection pool and Drizzle client. Connections are opened lazily,
+ * so the API starts (and reports not-ready) while the database is coming up.
  */
 export function createDatabase(config: DatabaseConfig, logger: Logger): Database {
   const pool = new pg.Pool({
@@ -32,6 +41,7 @@ export function createDatabase(config: DatabaseConfig, logger: Logger): Database
 
   return {
     pool,
+    db: drizzle({ client: pool, schema }),
     async ping() {
       await pool.query('SELECT 1');
     },

@@ -1,6 +1,8 @@
 # Generated
 pnpm-lock.yaml
 CHANGELOG.md
+# drizzle-kit rewrites its journal and snapshots on every `pnpm db:generate`
+drizzle/meta/
 coverage/
 dist/
 
