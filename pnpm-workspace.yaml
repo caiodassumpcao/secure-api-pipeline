@@ -10,8 +10,28 @@ minimumReleaseAge: 4320
 trustPolicy: no-downgrade
 
 # Dependency lifecycle scripts are denied unless explicitly approved here.
+# Every entry below was reviewed and denied: none is needed at runtime or in CI.
 strictDepBuilds: true
-allowBuilds: {}
+allowBuilds:
+  # Optional native addon of ssh2 (Testcontainers); ssh2 falls back to JS.
+  cpu-features: false
+  # Binary comes from the @esbuild/<platform> optional dependency (drizzle-kit).
+  esbuild: false
+  # Postinstall only prints a CLI notice (Testcontainers -> gRPC).
+  protobufjs: false
+  # Optional native crypto binding; pure-JS implementation is used instead.
+  ssh2: false
 
 # Fail on dependencies that do not support the Node.js version in use.
 engineStrict: true
+
+# Patched versions of vulnerable transitive development dependencies. Both are
+# already in the lockfile through other packages; remove an entry once the
+# parent package depends on a fixed version.
+overrides:
+  # GHSA-67mh-4wv8-2f99 (esbuild <= 0.24.2), via drizzle-kit ->
+  # @esbuild-kit/esm-loader. core-utils only calls transform/transformSync.
+  '@esbuild-kit/core-utils>esbuild': 0.25.12
+  # GHSA-3g3m-2fjr-6pw4 (glob 9 - 14.0.1), via testcontainers -> archiver.
+  # archiver-utils only calls glob.sync, still exported by glob 14.
+  'archiver-utils>glob': 14.0.4

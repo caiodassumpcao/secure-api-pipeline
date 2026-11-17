@@ -8,7 +8,7 @@ Significant technical decisions, why they were made and what they cost. An accep
 | [0002](0002-drizzle-orm-with-reviewed-sql-migrations.md) | Drizzle ORM with reviewed SQL migrations                     | Accepted |
 | [0003](0003-pnpm-and-release-please.md)                  | pnpm and release-please for versioning                       | Accepted |
 | 0004                                                     | Token strategy: short JWT + rotating opaque refresh tokens   | Planned  |
-| 0005                                                     | Tenant isolation enforced at repository layer                | Planned  |
+| [0005](0005-tenant-isolation-at-repository-layer.md)     | Tenant isolation enforced at repository layer                | Accepted |
 | 0006                                                     | OpenTelemetry for traces and metrics                         | Planned  |
 | 0007                                                     | Supply-chain security: SBOM, cosign keyless, SLSA provenance | Planned  |
 | 0008                                                     | Expand/contract migrations for safe rollbacks                | Planned  |

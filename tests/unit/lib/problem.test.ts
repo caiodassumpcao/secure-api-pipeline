@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   buildGenericProblem,
@@ -55,5 +56,16 @@ describe('HttpProblem', () => {
   it('uses the detail as message, or the title when there is none', () => {
     expect(new HttpProblem(ProblemTypes.notFound, 'Task not found').message).toBe('Task not found');
     expect(new HttpProblem(ProblemTypes.notFound).message).toBe('Not Found');
+  });
+});
+
+describe('problem type documentation', () => {
+  it('has a section in docs/problems.md for every problem type', () => {
+    const doc = readFileSync(new URL('../../../docs/problems.md', import.meta.url), 'utf8');
+    const sections = new Set([...doc.matchAll(/^## `([a-z-]+)`$/gm)].map((match) => match[1]));
+
+    for (const { slug, status } of Object.values(ProblemTypes)) {
+      expect(sections, `${slug} (${status})`).toContain(slug);
+    }
   });
 });

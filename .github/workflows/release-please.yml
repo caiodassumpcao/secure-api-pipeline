@@ -1,0 +1,46 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# Runs one at a time, never cancelled: each run reconciles the release PR with
+# the commits on main and may create a tag and a GitHub Release.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Every write uses the GitHub App token below, not GITHUB_TOKEN.
+    permissions: {}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      # A pull request opened with GITHUB_TOKEN triggers no workflows, so the
+      # required checks would never report on release PRs (ADR-0003). The token
+      # expires after one hour and is revoked when the job ends.
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          # GitHub accepts the App ID or its client ID as the JWT issuer.
+          client-id: ${{ vars.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      # Reads release-please-config.json and .release-please-manifest.json.
+      - name: Release PR, tag and GitHub Release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}

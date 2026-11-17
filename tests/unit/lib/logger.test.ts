@@ -1,3 +1,4 @@
+import { DrizzleQueryError } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createLogger, REDACTED, redactUrl } from '../../../src/lib/logger.ts';
 import { LogCapture } from '../../helpers/log-capture.ts';
@@ -87,6 +88,41 @@ describe('createLogger', () => {
       remoteAddress: '10.0.0.1',
       remotePort: 51234,
     });
+  });
+});
+
+describe('database errors', () => {
+  it('keep the SQL and error code but never the bound values', () => {
+    const cause = Object.assign(new Error('Key (email)=(ana@example.com) already exists.'), {
+      code: '23505',
+      constraint: 'users_email_unique',
+      table: 'users',
+      detail: 'Key (email)=(ana@example.com) already exists.',
+    });
+    const err = new DrizzleQueryError(
+      'insert into "users" ("email", "password_hash") values ($1, $2)',
+      ['ana@example.com', '$argon2id$v=19$secret-hash'],
+      cause,
+    );
+
+    const logs = logOnce({ err });
+
+    const [entry] = logs.entries;
+    expect(entry?.err).toEqual({
+      type: 'DrizzleQueryError',
+      message: 'Database query failed',
+      query: 'insert into "users" ("email", "password_hash") values ($1, $2)',
+      cause: { code: '23505', constraint: 'users_email_unique', table: 'users' },
+      stack: expect.stringMatching(/^ {4}at /),
+    });
+    expect(logs.text).not.toContain('ana@example.com');
+    expect(logs.text).not.toContain('secret-hash');
+  });
+
+  it('serialize other errors as usual', () => {
+    const [entry] = logOnce({ err: new TypeError('boom') }).entries;
+
+    expect(entry?.err).toMatchObject({ type: 'TypeError', message: 'boom' });
   });
 });
 

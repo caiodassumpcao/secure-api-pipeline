@@ -36,6 +36,7 @@ function setup() {
   const database = createDatabase(
     { url: 'postgres://app:pw@localhost:5432/app' },
     logger as unknown as Parameters<typeof createDatabase>[1],
+    { expectedMigration: 1_000 },
   );
   const pool = pools.at(-1)!;
   return { database, pool, logger };
@@ -88,5 +89,37 @@ describe('createDatabase', () => {
     pool.listeners.get('error')?.(failure);
 
     expect(logger.error).toHaveBeenCalledWith({ err: failure }, 'idle database client error');
+  });
+  describe('migrationsApplied', () => {
+    it.each([
+      ['the latest expected migration', '1000', true],
+      ['a newer migration (application rolled back)', '2000', true],
+      ['an older migration', '999', false],
+      ['no migration', null, false],
+    ])('is %s → %s', async (_case, latest, expected) => {
+      const { database, pool } = setup();
+      pool.query.mockResolvedValueOnce({ rows: [{ latest }] });
+
+      await expect(database.migrationsApplied()).resolves.toBe(expected);
+      expect(pool.query).toHaveBeenCalledWith(
+        'SELECT max(created_at)::text AS latest FROM drizzle.__drizzle_migrations',
+      );
+    });
+
+    it('is false when migrations never ran (no migrations table)', async () => {
+      const { database, pool } = setup();
+      pool.query.mockRejectedValueOnce(
+        Object.assign(new Error('relation does not exist'), { code: '42P01' }),
+      );
+
+      await expect(database.migrationsApplied()).resolves.toBe(false);
+    });
+
+    it('propagates other errors', async () => {
+      const { database, pool } = setup();
+      pool.query.mockRejectedValueOnce(new Error('ECONNRESET'));
+
+      await expect(database.migrationsApplied()).rejects.toThrow('ECONNRESET');
+    });
   });
 });

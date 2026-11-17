@@ -1,28 +1,30 @@
 import { buildApp } from './app.ts';
-import { ConfigError, loadConfig, type Config } from './config/config.ts';
+import { loadConfigOrExit } from './config/load-or-exit.ts';
 import { createDatabase } from './db/database.ts';
+import { latestMigration } from './db/migrations.ts';
 import { createLogger } from './lib/logger.ts';
 import { registerGracefulShutdown } from './lib/shutdown.ts';
+import {
+  createTestAuthenticator,
+  denyAllAuthenticator,
+  type Authenticator,
+} from './plugins/authentication.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
-function loadConfigOrExit(): Config {
-  try {
-    return loadConfig();
-  } catch (error) {
-    // Issues name the variables but never their values. Any other error is not
-    // logged as is: it could carry a raw environment value.
-    const issues =
-      error instanceof ConfigError ? error.issues : ['the configuration could not be loaded'];
-    createLogger({ level: 'info' }).fatal({ issues }, 'invalid configuration');
-    process.exit(1);
-  }
-}
-
 const config = loadConfigOrExit();
 const logger = createLogger(config.log);
-const database = createDatabase(config.database, logger);
-const app = await buildApp({ logger, database });
+const database = createDatabase(config.database, logger, { expectedMigration: latestMigration() });
+
+let authenticate: Authenticator = denyAllAuthenticator;
+if (config.env === 'test') {
+  authenticate = createTestAuthenticator(config.env);
+  logger.warn(
+    'test authentication stub enabled: callers are identified by the x-test-user-id header',
+  );
+}
+
+const app = await buildApp({ logger, database, authenticate, docs: config.docs });
 
 app.addHook('onClose', async () => {
   await database.close();

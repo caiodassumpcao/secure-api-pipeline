@@ -24,6 +24,7 @@ describe('loadConfig', () => {
       server: { host: '127.0.0.1', port: 3000 },
       log: { level: 'info' },
       database: { url: DATABASE_URL },
+      docs: { enabled: true },
     });
   });
 
@@ -38,6 +39,32 @@ describe('loadConfig', () => {
       server: { host: '0.0.0.0', port: 8080 },
       log: { level: 'debug' },
       database: { url: DATABASE_URL },
+      docs: { enabled: true },
+    });
+  });
+
+  describe('API docs', () => {
+    it('are disabled by default in production', () => {
+      expect(loadConfig({ NODE_ENV: 'production', DATABASE_URL }, noFiles).docs.enabled).toBe(
+        false,
+      );
+    });
+
+    it('can be enabled explicitly in production', () => {
+      const env = { NODE_ENV: 'production', API_DOCS_ENABLED: 'true', DATABASE_URL };
+      expect(loadConfig(env, noFiles).docs.enabled).toBe(true);
+    });
+
+    it('can be disabled outside production', () => {
+      expect(loadConfig({ API_DOCS_ENABLED: 'false', DATABASE_URL }, noFiles).docs.enabled).toBe(
+        false,
+      );
+    });
+
+    it('rejects values other than true or false', () => {
+      expect(
+        configError(() => loadConfig({ API_DOCS_ENABLED: 'yes', DATABASE_URL }, noFiles)).issues,
+      ).toEqual(['API_DOCS_ENABLED: must be true or false']);
     });
   });
 

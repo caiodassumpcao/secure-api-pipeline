@@ -47,6 +47,8 @@ export default defineConfig(
     rules: {
       // Test doubles are often partial objects passed where a full type is expected.
       '@typescript-eslint/no-unsafe-assignment': 'off',
+      // Tests build temporary paths (fixtures, compose.yaml); no user input involved.
+      'security/detect-non-literal-fs-filename': 'off',
       '@typescript-eslint/no-non-null-assertion': 'off',
     },
   },

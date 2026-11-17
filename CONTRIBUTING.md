@@ -23,18 +23,21 @@ To run the whole stack in containers instead: `docker compose up -d --build --wa
 
 ## Scripts
 
-| Command              | What it does                                                              |
-| -------------------- | ------------------------------------------------------------------------- |
-| `pnpm dev`           | Runs `src/main.ts` with Node's built-in TypeScript support, in watch mode |
-| `pnpm build`         | Compiles to `dist/`                                                       |
-| `pnpm start`         | Runs the compiled build                                                   |
-| `pnpm lint`          | ESLint (type-aware, security rules) and the Prettier check                |
-| `pnpm lint:fix`      | Fixes what ESLint and Prettier can fix                                    |
-| `pnpm typecheck`     | TypeScript in strict mode                                                 |
-| `pnpm test`          | Unit tests                                                                |
-| `pnpm test:coverage` | Unit tests with the coverage gate (85 %)                                  |
+| Command                 | What it does                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `pnpm dev`              | Runs `src/main.ts` with Node's built-in TypeScript support, in watch mode         |
+| `pnpm build`            | Compiles to `dist/`                                                               |
+| `pnpm start`            | Runs the compiled build                                                           |
+| `pnpm lint`             | ESLint (type-aware, security rules) and the Prettier check                        |
+| `pnpm lint:fix`         | Fixes what ESLint and Prettier can fix                                            |
+| `pnpm typecheck`        | TypeScript in strict mode                                                         |
+| `pnpm test`             | Unit tests (no Docker needed)                                                     |
+| `pnpm test:integration` | Integration and security suites against PostgreSQL (Testcontainers, needs Docker) |
+| `pnpm test:coverage`    | Every suite, with the coverage gate (85 %)                                        |
+| `pnpm db:generate`      | Generates a SQL migration in `drizzle/` from `src/db/schema.ts`                   |
+| `pnpm db:migrate`       | Applies pending migrations to `DATABASE_URL`                                      |
 
-Run `pnpm lint && pnpm typecheck && pnpm test` before every push; CI runs the same checks.
+Run `pnpm lint && pnpm typecheck && pnpm test` before every push, and `pnpm test:integration` when a change touches data or routes; CI runs all of them. Generated migrations are reviewed like code: expand/contract, no destructive statement in the same release as the code that stops using a column.
 
 ## Branches, commits and pull requests
 

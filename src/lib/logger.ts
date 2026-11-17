@@ -1,3 +1,4 @@
+import { DrizzleQueryError } from 'drizzle-orm';
 import { pino, type DestinationStream, type Logger, type LoggerOptions } from 'pino';
 import type { LogLevel } from '../config/config.ts';
 
@@ -89,20 +90,61 @@ function serializeRequest(request: LoggedRequest) {
   };
 }
 
+/** Structural fields of a PostgreSQL error. `message` and `detail` are left out: they can embed values. */
+const DATABASE_ERROR_FIELDS = [
+  'code',
+  'severity',
+  'constraint',
+  'table',
+  'column',
+  'routine',
+] as const;
+
+function serializeDatabaseCause(cause: unknown): Record<string, unknown> | undefined {
+  if (typeof cause !== 'object' || cause === null) return undefined;
+  return Object.fromEntries(
+    DATABASE_ERROR_FIELDS.filter((field) => field in cause).map((field) => [
+      field,
+      Reflect.get(cause, field),
+    ]),
+  );
+}
+
+/**
+ * Drizzle wraps query failures in DrizzleQueryError, whose message, stack and
+ * `params` hold the bound values (passwords, emails, tokens). Only the SQL text
+ * (with placeholders) and the database error code are kept.
+ */
+function serializeError(err: unknown): unknown {
+  if (err instanceof DrizzleQueryError) {
+    return {
+      type: 'DrizzleQueryError',
+      message: 'Database query failed',
+      query: err.query,
+      cause: serializeDatabaseCause(err.cause),
+      stack: err.stack
+        ?.split('\n')
+        .filter((line) => line.startsWith('    at '))
+        .join('\n'),
+    };
+  }
+  return err instanceof Error ? pino.stdSerializers.err(err) : err;
+}
+
 export interface LoggerConfig {
   readonly level: LogLevel;
 }
 
 /**
  * JSON logger shared by the HTTP server and the rest of the process. Secrets are
- * redacted by path (see {@link REDACT_PATHS}) and in request URLs; unit tests
- * guard both.
+ * redacted by path (see {@link REDACT_PATHS}), in request URLs and in database
+ * errors; unit tests guard all three.
  */
 export function createLogger(config: LoggerConfig, destination?: DestinationStream): Logger {
   const options: LoggerOptions = {
     level: config.level,
     redact: { paths: [...REDACT_PATHS], censor: REDACTED },
-    serializers: { req: serializeRequest },
+    serializers: { req: serializeRequest, err: serializeError },
     timestamp: pino.stdTimeFunctions.isoTime,
     formatters: {
       level: (label) => ({ level: label }),

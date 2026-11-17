@@ -34,6 +34,9 @@ WORKDIR /app
 COPY package.json ./
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+# SQL migrations, applied by `node dist/migrate.js`; the journal also tells the
+# readiness probe which schema this build expects.
+COPY drizzle ./drizzle
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
