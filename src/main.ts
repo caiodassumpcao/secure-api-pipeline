@@ -24,7 +24,7 @@ if (config.env === 'test') {
   );
 }
 
-const app = await buildApp({ logger, database, authenticate });
+const app = await buildApp({ logger, database, authenticate, docs: config.docs });
 
 app.addHook('onClose', async () => {
   await database.close();

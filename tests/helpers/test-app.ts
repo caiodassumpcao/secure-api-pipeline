@@ -9,6 +9,7 @@ export interface TestAppOptions {
   ping?: () => Promise<void>;
   migrationsApplied?: () => Promise<boolean>;
   authenticate?: Authenticator;
+  docs?: boolean;
 }
 
 /**
@@ -24,6 +25,7 @@ export async function buildTestApp(options: TestAppOptions = {}) {
     logger,
     database: { ping, migrationsApplied, db: {} as Db },
     authenticate: options.authenticate ?? denyAllAuthenticator,
+    docs: { enabled: options.docs ?? false },
   });
   return { app, logs, ping, migrationsApplied };
 }

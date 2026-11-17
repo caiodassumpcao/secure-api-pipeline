@@ -11,6 +11,7 @@ export interface Config {
   readonly server: { readonly host: string; readonly port: number };
   readonly log: { readonly level: LogLevel };
   readonly database: { readonly url: string };
+  readonly docs: { readonly enabled: boolean };
 }
 
 /**
@@ -39,6 +40,11 @@ const envSchema = z
     HOST: z.string().min(1).default('127.0.0.1'),
     PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
     LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+    // Defaults to enabled outside production (resolved below).
+    API_DOCS_ENABLED: z
+      .enum(['true', 'false'], { error: 'must be true or false' })
+      .transform((value) => value === 'true')
+      .optional(),
     // Error messages must never echo the value: the URL carries credentials.
     DATABASE_URL: z.url({
       protocol: /^postgres(ql)?$/,
@@ -148,5 +154,6 @@ export function loadConfig(
     server: { host: parsed.HOST, port: parsed.PORT },
     log: { level: parsed.LOG_LEVEL },
     database: { url: parsed.DATABASE_URL },
+    docs: { enabled: parsed.API_DOCS_ENABLED ?? parsed.NODE_ENV !== 'production' },
   };
 }

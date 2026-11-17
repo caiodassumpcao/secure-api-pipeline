@@ -16,6 +16,7 @@ import { workspaceRoutes } from './modules/workspaces/workspaces.routes.ts';
 import { createWorkspacesService } from './modules/workspaces/workspaces.service.ts';
 import { registerAuthentication, type Authenticator } from './plugins/authentication.ts';
 import { frameworkErrorHandler, registerErrorHandler } from './plugins/error-handler.ts';
+import { registerOpenApi } from './plugins/openapi.ts';
 import { generateRequestId, registerRequestIdHeader } from './plugins/request-id.ts';
 
 /** Request body cap (DoS control, DESIGN §5.1). */
@@ -29,13 +30,15 @@ export interface AppDependencies {
   readonly database: ReadinessProbe & { readonly db: Db };
   /** Resolves the caller of `/v1` routes (test stub until Phase 2). */
   readonly authenticate: Authenticator;
+  /** Serve `/docs` and `/openapi.json` (off in production unless enabled). */
+  readonly docs: { readonly enabled: boolean };
 }
 
 /**
  * Creates the Fastify instance with all plugins and routes, without listening.
  * Tests use it with `app.inject()`; `main.ts` adds the process lifecycle.
  */
-export async function buildApp({ logger, database, authenticate }: AppDependencies) {
+export async function buildApp({ logger, database, authenticate, docs }: AppDependencies) {
   const app = Fastify({
     loggerInstance: logger,
     genReqId: generateRequestId,
@@ -53,6 +56,9 @@ export async function buildApp({ logger, database, authenticate }: AppDependenci
 
   registerRequestIdHeader(app);
   registerErrorHandler(app);
+
+  // Before any route, so every route is documented.
+  if (docs.enabled) await registerOpenApi(app);
 
   await app.register(healthRoutes, { database });
 

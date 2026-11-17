@@ -48,6 +48,7 @@ export class TestApi {
       logger: createLogger({ level: 'silent' }),
       database: testDatabase.database,
       authenticate: createTestAuthenticator('test'),
+      docs: { enabled: false },
     });
     await app.ready();
     return new TestApi(app, testDatabase);

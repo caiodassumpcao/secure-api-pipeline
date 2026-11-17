@@ -21,6 +21,7 @@ async function ready(testDatabase: TestDatabase) {
     logger: createLogger({ level: 'silent' }),
     database: testDatabase.database,
     authenticate: denyAllAuthenticator,
+    docs: { enabled: false },
   });
   try {
     return await app.inject({ method: 'GET', url: '/health/ready' });
