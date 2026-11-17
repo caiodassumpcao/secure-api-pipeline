@@ -39,15 +39,21 @@ A **production-grade reference** for building, securing, shipping and operating 
 
 Multi-tenant **project & task tracker** — small enough to stay focused, rich enough to exercise real authorization.
 
-| Entity           | Fields (main)                                                                                                     | Notes                                                                        |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `users`          | id (uuid v7), email (unique, citext), password_hash, name, created_at, locked_until                               |                                                                              |
-| `workspaces`     | id, name, slug, created_at                                                                                        | Tenant boundary                                                              |
-| `memberships`    | workspace_id, user_id, role, created_at                                                                           | Role: `owner` · `admin` · `member` · `viewer`                                |
-| `projects`       | id, workspace_id, name, archived_at, created_at                                                                   | Archived projects keep their tasks, read-only                                |
-| `tasks`          | id, workspace_id, project_id, title, description, status, priority, assignee_id, due_date, created_by, timestamps | Status: `todo` · `in_progress` · `done`; priority: `low` · `medium` · `high` |
-| `refresh_tokens` | id, user_id, family_id, token_hash, expires_at, revoked_at, replaced_by                                           | Rotation + reuse detection                                                   |
-| `audit_events`   | id, workspace_id?, actor_id?, action, target, ip, user_agent, metadata (jsonb), created_at                        | Append-only                                                                  |
+| Entity                   | Fields (main)                                                                                                        | Notes                                                                        |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `users`                  | id (uuid v7), email (unique, citext), password_hash, name, created_at, locked_until, failed_login_attempts           | Lockout applies to clients without a device cookie (ADR-0009)                |
+| `workspaces`             | id, name, slug, created_at                                                                                           | Tenant boundary                                                              |
+| `memberships`            | workspace_id, user_id, role, created_at                                                                              | Role: `owner` · `admin` · `member` · `viewer`                                |
+| `invitations`            | id, workspace_id, role, email?, token_hash, invited_by, created_at, expires_at, accepted_by, accepted_at, revoked_at | Single-use link, 7 days (ADR-0010)                                           |
+| `projects`               | id, workspace_id, name, archived_at, created_at                                                                      | Archived projects keep their tasks, read-only                                |
+| `tasks`                  | id, workspace_id, project_id, title, description, status, priority, assignee_id, due_date, created_by, timestamps    | Status: `todo` · `in_progress` · `done`; priority: `low` · `medium` · `high` |
+| `refresh_token_families` | id, user_id, created_at, expires_at, revoked_at, revoked_reason                                                      | One session: 30-day absolute lifetime; revoked on logout or reuse (ADR-0004) |
+| `refresh_tokens`         | id, family_id, token_hash, created_at, expires_at, replaced_by, rotated_at                                           | Rotation + reuse detection; 7-day idle lifetime                              |
+| `trusted_devices`        | id, user_id, token_hash, created_at, last_used_at, expires_at, failed_attempts, revoked_at                           | Device cookies, 90 days (ADR-0009)                                           |
+| `audit_events`           | id, workspace_id?, actor_id?, action, target, ip (inet), user_agent, metadata (jsonb), created_at                    | Append-only (trigger), no foreign keys, 365 days                             |
+| `rate_limits`            | key (hashed), hits, reset_at                                                                                         | `UNLOGGED`; fixed windows shared by every instance                           |
+
+Opaque secrets (refresh tokens, device cookies, invitation links) are 256 random bits stored only as their SHA-256.
 
 `workspace_id` is denormalized on `tasks` to make tenant filters mandatory and cheap. Composite foreign keys keep it consistent: `(workspace_id, project_id)` references `projects (workspace_id, id)` and `(workspace_id, assignee_id)` references `memberships (workspace_id, user_id)`, so the database itself rejects a task that points to a project or an assignee of another workspace (ADR-0005).
 
@@ -63,7 +69,7 @@ Primary keys are UUID v7 generated by the application: time-ordered (strictly in
 | Delete tasks                          |  ✅   |       ✅        | own only |   ❌   |
 | Create/rename/archive projects        |  ✅   |       ✅        |    ❌    |   ❌   |
 | Update workspace (name, slug)         |  ✅   |       ✅        |    ❌    |   ❌   |
-| Manage members                        |  ✅   | ✅ (not owners) |    ❌    |   ❌   |
+| Manage members and invitations        |  ✅   | ✅ (not owners) |    ❌    |   ❌   |
 | Delete workspace / transfer ownership |  ✅   |       ❌        |    ❌    |   ❌   |
 | Read audit log                        |  ✅   |       ✅        |    ❌    |   ❌   |
 
@@ -73,7 +79,7 @@ Rules enforced by the services:
 
 - A caller who is not a member of the workspace gets **404** for the workspace and everything in it, exactly as if it did not exist; a member whose role lacks the permission gets **403**.
 - Granting the `owner` role is how ownership is transferred; only owners grant, change or revoke it. A workspace always keeps at least one owner: membership changes lock the workspace row, so concurrent requests cannot both remove "the other" owner.
-- Members are added by the email of an existing account. Removing a member unassigns their tasks in the same transaction.
+- Members join through invitation links accepted by the invitee (ADR-0010); only owners invite or revoke owners. Removing a member unassigns their tasks in the same transaction.
 - Archiving a project (`DELETE`) is idempotent and freezes its tasks: they stay readable, while creating, updating or deleting them answers 409.
 
 ---
@@ -82,27 +88,30 @@ Rules enforced by the services:
 
 Base path `/v1`. JSON only. Errors follow **RFC 9457** (`application/problem+json`) with `type`, `title`, `status`, `detail`, `instance`, `traceId`. Validation errors include `errors[]` with field paths. Never leak stack traces or SQL.
 
-| Method                | Path                                             | Auth   | Description                                                     |
-| --------------------- | ------------------------------------------------ | ------ | --------------------------------------------------------------- |
-| POST                  | `/v1/auth/register`                              | —      | Create account (+ personal workspace)                           |
-| POST                  | `/v1/auth/login`                                 | —      | Returns access token + sets refresh cookie                      |
-| POST                  | `/v1/auth/refresh`                               | cookie | Rotates refresh token                                           |
-| POST                  | `/v1/auth/logout`                                | ✅     | Revokes refresh token family                                    |
-| GET                   | `/v1/me`                                         | ✅     | Current user + memberships                                      |
-| GET/POST              | `/v1/workspaces`                                 | ✅     | List / create                                                   |
-| GET/PATCH/DELETE      | `/v1/workspaces/:wsId`                           | ✅     |                                                                 |
-| GET/POST/PATCH/DELETE | `/v1/workspaces/:wsId/members[/:userId]`         | ✅     | Add by email of an existing account; change role; remove        |
-| GET/POST              | `/v1/workspaces/:wsId/projects`                  | ✅     | Filter: `includeArchived`; cursor pagination                    |
-| GET/PATCH/DELETE      | `/v1/workspaces/:wsId/projects/:projectId`       | ✅     | Rename; `DELETE` archives                                       |
-| GET/POST              | `/v1/workspaces/:wsId/projects/:projectId/tasks` | ✅     | Filters: `status`, `priority`, `assigneeId`; cursor pagination  |
-| GET/PATCH/DELETE      | `/v1/workspaces/:wsId/tasks/:taskId`             | ✅     |                                                                 |
-| GET                   | `/v1/workspaces/:wsId/audit-events`              | ✅     | Cursor pagination                                               |
-| GET                   | `/health/live`, `/health/ready`                  | —      | Liveness / readiness (DB ping; applied migrations from Phase 1) |
-| GET                   | `/docs`, `/openapi.json`                         | —      | Disabled in production unless `API_DOCS_ENABLED=true`           |
+| Method           | Path                                             | Auth   | Description                                                    |
+| ---------------- | ------------------------------------------------ | ------ | -------------------------------------------------------------- |
+| POST             | `/v1/auth/register`                              | —      | Create account (+ personal workspace it owns)                  |
+| POST             | `/v1/auth/login`                                 | —      | Returns access token; sets refresh and device cookies          |
+| POST             | `/v1/auth/refresh`                               | cookie | Rotates the refresh token; reuse revokes the session           |
+| POST             | `/v1/auth/logout`                                | cookie | Revokes the session; always 204                                |
+| GET              | `/v1/me`                                         | ✅     | Current user + memberships (up to 100)                         |
+| GET/POST         | `/v1/workspaces`                                 | ✅     | List / create                                                  |
+| GET/PATCH/DELETE | `/v1/workspaces/:wsId`                           | ✅     |                                                                |
+| GET/PATCH/DELETE | `/v1/workspaces/:wsId/members[/:userId]`         | ✅     | Change role; remove                                            |
+| GET/POST         | `/v1/workspaces/:wsId/invitations`               | ✅     | Pending invitations / create a single-use link                 |
+| DELETE           | `/v1/workspaces/:wsId/invitations/:invitationId` | ✅     | Revoke                                                         |
+| POST             | `/v1/invitations/accept`                         | ✅     | Join the workspace of a link                                   |
+| GET/POST         | `/v1/workspaces/:wsId/projects`                  | ✅     | Filter: `includeArchived`; cursor pagination                   |
+| GET/PATCH/DELETE | `/v1/workspaces/:wsId/projects/:projectId`       | ✅     | Rename; `DELETE` archives                                      |
+| GET/POST         | `/v1/workspaces/:wsId/projects/:projectId/tasks` | ✅     | Filters: `status`, `priority`, `assigneeId`; cursor pagination |
+| GET/PATCH/DELETE | `/v1/workspaces/:wsId/tasks/:taskId`             | ✅     |                                                                |
+| GET              | `/v1/workspaces/:wsId/audit-events`              | ✅     | Newest first; filter: `action`; cursor pagination              |
+| GET              | `/health/live`, `/health/ready`                  | —      | Liveness / readiness (DB ping; applied migrations)             |
+| GET              | `/docs`, `/openapi.json`                         | —      | Disabled in production unless `API_DOCS_ENABLED=true`          |
 
 `/metrics` is served on a **separate internal port** (`METRICS_PORT`, default 9464), never through the public proxy.
 
-Until Phase 2 delivers authentication, `/v1` routes answer 401 everywhere except under `NODE_ENV=test`, where a stub identifies the caller by the `x-test-user-id` header. The stub cannot be constructed in any other environment.
+Authentication (ADR-0004): `/v1` routes take an access token in `Authorization: Bearer`; a rejected token gets `WWW-Authenticate: Bearer …, error="invalid_token"`. The refresh token travels only in the `__Secure-refresh` cookie, to `/v1/auth`; refresh and logout refuse cross-site requests (`Sec-Fetch-Site`, `Origin` outside the API's own and `CORS_ORIGINS`). Every response carries `Cache-Control: no-store` unless a route chose otherwise. Rate limits answer 429 with `Retry-After` (ADR-0009).
 
 Pagination: `?limit=` (1–100, default 20) + opaque `?cursor=`; response `{ data: [], nextCursor }`.
 
@@ -121,13 +130,15 @@ src/
 ├── db/                     # drizzle client, schema, migrations, transaction helper
 ├── modules/
 │   ├── health/             # liveness and readiness routes
-│   ├── auth/               # routes, service, tokens, password, permissions
+│   ├── auth/               # routes, service, tokens, keys, password, cookies, permissions
 │   ├── workspaces/
 │   ├── members/
+│   ├── invitations/
 │   ├── projects/
 │   ├── tasks/
 │   └── audit/
-├── lib/                    # problem details, pagination, ids, clock
+├── jobs/                   # cleanup of expired rows (advisory lock, hourly)
+├── lib/                    # problem details, pagination, ids, opaque tokens, rate limiter
 └── types/
 ```
 
@@ -135,25 +146,25 @@ Each module: `*.routes.ts` (HTTP + zod schemas) → `*.service.ts` (business rul
 
 ### 4.1 Technology decisions
 
-| Concern          | Choice                                                                                                                                                                                      |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime          | Node.js 24 LTS. `pnpm dev` runs the TypeScript sources directly with Node's built-in type stripping (`node --watch`), so no transpiler dependency; `tsc` builds `dist/`                     |
-| Language         | TypeScript 5.9 (`strict`, `noUncheckedIndexedAccess`, ESM, `erasableSyntaxOnly`). Held below 6.1 until typescript-eslint supports newer releases                                            |
-| Package manager  | pnpm 12 via corepack (version + sha512 pinned in `packageManager`), lockfile committed, `--frozen-lockfile` in CI and image builds; supply-chain policy in `pnpm-workspace.yaml` (ADR-0003) |
-| HTTP             | Fastify 5 + `fastify-type-provider-zod`                                                                                                                                                     |
-| Validation       | zod (request, response and env)                                                                                                                                                             |
-| Database         | PostgreSQL 17                                                                                                                                                                               |
-| Data access      | Drizzle ORM + drizzle-kit SQL migrations (reviewed, committed)                                                                                                                              |
-| Passwords        | argon2id (`@node-rs/argon2`)                                                                                                                                                                |
-| Tokens           | `jose` — EdDSA (Ed25519) access JWT, 15 min; opaque refresh token (256-bit), stored hashed (SHA-256), 7 days, `HttpOnly; Secure; SameSite=Strict` cookie, path `/v1/auth`                   |
-| Security plugins | `@fastify/helmet`, `@fastify/cors` (allowlist), `@fastify/rate-limit`, `@fastify/cookie`                                                                                                    |
-| Logging          | pino (JSON), redaction of auth headers, cookies, passwords and tokens (up to 3 levels deep), sensitive query parameters masked in logged URLs                                               |
-| Telemetry        | OpenTelemetry Node SDK, auto-instrumentation (http, fastify, pg), OTLP/HTTP exporter, Prometheus exporter                                                                                   |
-| API docs         | `@fastify/swagger` generated from zod schemas                                                                                                                                               |
-| Tests            | Vitest, `app.inject()`, Testcontainers (PostgreSQL)                                                                                                                                         |
-| Lint/format      | ESLint (flat config, typescript-eslint strict, `eslint-plugin-security`), Prettier                                                                                                          |
-| Commits          | commitlint (Conventional Commits) on commits and PR titles, husky + lint-staged, Gitleaks in the pre-commit hook                                                                            |
-| Releases         | release-please (versions, CHANGELOG, GitHub Releases)                                                                                                                                       |
+| Concern          | Choice                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime          | Node.js 24 LTS. `pnpm dev` runs the TypeScript sources directly with Node's built-in type stripping (`node --watch`), so no transpiler dependency; `tsc` builds `dist/`                                                                                                                                                                                       |
+| Language         | TypeScript 5.9 (`strict`, `noUncheckedIndexedAccess`, ESM, `erasableSyntaxOnly`). Held below 6.1 until typescript-eslint supports newer releases                                                                                                                                                                                                              |
+| Package manager  | pnpm 12 via corepack (version + sha512 pinned in `packageManager`), lockfile committed, `--frozen-lockfile` in CI and image builds; supply-chain policy in `pnpm-workspace.yaml` (ADR-0003)                                                                                                                                                                   |
+| HTTP             | Fastify 5 + `fastify-type-provider-zod`                                                                                                                                                                                                                                                                                                                       |
+| Validation       | zod (request, response and env)                                                                                                                                                                                                                                                                                                                               |
+| Database         | PostgreSQL 17                                                                                                                                                                                                                                                                                                                                                 |
+| Data access      | Drizzle ORM + drizzle-kit SQL migrations (reviewed, committed)                                                                                                                                                                                                                                                                                                |
+| Passwords        | argon2id (`@node-rs/argon2`): 19 MiB, 2 passes, 1 lane (OWASP baseline), parameters in the PHC string and rehash on login; NFKC, 12–128 characters, breached-password blocklist (NIST SP 800-63B)                                                                                                                                                             |
+| Tokens           | `jose` — Ed25519 access JWT (`alg: Ed25519`, RFC 9864; `typ: at+jwt`), 15 min, `kid` = RFC 7638 thumbprint, previous public key accepted during rotations; opaque refresh token (256-bit) stored as SHA-256 in rotating families, 7 days idle / 30 days absolute, `__Secure-refresh` cookie (`HttpOnly; Secure; SameSite=Strict`, path `/v1/auth`) (ADR-0004) |
+| Security plugins | `@fastify/helmet`, `@fastify/cors` (allowlist), `@fastify/rate-limit`, `@fastify/cookie`                                                                                                                                                                                                                                                                      |
+| Logging          | pino (JSON), redaction of auth headers, cookies, passwords and tokens (up to 3 levels deep), sensitive query parameters masked in logged URLs                                                                                                                                                                                                                 |
+| Telemetry        | OpenTelemetry Node SDK, auto-instrumentation (http, fastify, pg), OTLP/HTTP exporter, Prometheus exporter                                                                                                                                                                                                                                                     |
+| API docs         | `@fastify/swagger` generated from zod schemas                                                                                                                                                                                                                                                                                                                 |
+| Tests            | Vitest, `app.inject()`, Testcontainers (PostgreSQL)                                                                                                                                                                                                                                                                                                           |
+| Lint/format      | ESLint (flat config, typescript-eslint strict, `eslint-plugin-security`), Prettier                                                                                                                                                                                                                                                                            |
+| Commits          | commitlint (Conventional Commits) on commits and PR titles, husky + lint-staged, Gitleaks in the pre-commit hook                                                                                                                                                                                                                                              |
+| Releases         | release-please (versions, CHANGELOG, GitHub Releases)                                                                                                                                                                                                                                                                                                         |
 
 ---
 
@@ -161,22 +172,23 @@ Each module: `*.routes.ts` (HTTP + zod schemas) → `*.service.ts` (business rul
 
 ### 5.1 Controls
 
-| Threat                                   | Control                                                                                                                                                              |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Credential stuffing / brute force        | Rate limit per IP and per email on `/auth/*`; progressive lockout (`locked_until`) after N failures; uniform error + constant-time compare to avoid user enumeration |
-| Weak passwords                           | Min 12 chars, max 128, zxcvbn-style score or common-password list check                                                                                              |
-| Token theft                              | Short-lived access JWT; refresh rotation with **reuse detection** (reuse of a rotated token revokes the whole family + audit event); logout revokes family           |
-| Broken object-level authorization (IDOR) | Every repository query requires `workspaceId`; membership + role checked in service layer; composite foreign keys; cross-tenant tests for every resource (ADR-0005)  |
-| Account enumeration via member addition  | Accepted residual risk until Phase 2: per-user rate limit, audit event, invitation flow evaluated (`docs/threat-model.md`)                                           |
-| Mass assignment                          | Explicit zod input schemas (`.strict()`), response schemas strip unknown fields                                                                                      |
-| Injection                                | Parameterized queries only (Drizzle); no raw SQL concatenation (ESLint rule + Semgrep)                                                                               |
-| XSS / clickjacking (docs page)           | Helmet CSP, `X-Content-Type-Options`, `frame-ancestors 'none'`                                                                                                       |
-| CSRF on refresh cookie                   | `SameSite=Strict`, cookie path restricted, origin check on `/auth/refresh`                                                                                           |
-| DoS                                      | Body limit (100 KB), connection/request timeouts, pagination caps, rate limit                                                                                        |
-| Sensitive data in logs                   | pino redaction + test asserting secrets never appear in logs                                                                                                         |
-| Secrets management                       | Config from env / Docker secrets files (`*_FILE`); app refuses to start with default or missing secrets in production                                                |
-| Supply chain                             | Lockfile, `pnpm audit`, OSV-Scanner, Dependabot, pinned Actions by SHA, SBOM, signed images, provenance                                                              |
-| Container escape / privilege             | Distroless non-root image, read-only root FS, `no-new-privileges`, dropped capabilities                                                                              |
+| Threat                                   | Control                                                                                                                                                                                                                                                                      |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Credential stuffing / brute force        | Rate limits per IP, per email and per user, shared by every instance (PostgreSQL); lockout after 10 failures for clients without a device cookie, so nobody can lock the owner out of a known device; identical 401 and argon2 cost for unknown, wrong and locked (ADR-0009) |
+| Weak passwords                           | 12–128 characters after NFKC normalization, breached-password blocklist, nothing derived from the email; no composition rules (NIST SP 800-63B)                                                                                                                              |
+| Token theft                              | 15-minute access JWT; refresh rotation with **reuse detection** (reuse of a rotated token revokes the whole family + audit event); tokens stored as SHA-256; logout revokes the family (ADR-0004)                                                                            |
+| Broken object-level authorization (IDOR) | Every repository query requires `workspaceId`; membership + role checked in service layer; composite foreign keys; cross-tenant tests for every resource (ADR-0005)                                                                                                          |
+| Account enumeration                      | Login failures answer alike; members join by invitation link, with no account lookup (ADR-0010); registration still discloses existing accounts (threat model RR-3)                                                                                                          |
+| Mass assignment                          | Explicit zod input schemas (`.strict()`), response schemas strip unknown fields                                                                                                                                                                                              |
+| Injection                                | Parameterized queries only (Drizzle); no raw SQL concatenation (ESLint rule + Semgrep)                                                                                                                                                                                       |
+| XSS / clickjacking                       | Helmet: CSP `default-src 'none'` on the API (Swagger UI gets its own), `X-Content-Type-Options`, `frame-ancestors 'none'`; `Cache-Control: no-store`                                                                                                                         |
+| CSRF on refresh cookie                   | `SameSite=Strict`, `__Secure-` cookie restricted to `/v1/auth`; refresh and logout refuse `Sec-Fetch-Site: cross-site` and foreign `Origin`s                                                                                                                                 |
+| DoS                                      | Body limit (100 KB), connection/request timeouts, pagination caps, 600 requests/min per IP before routing, stricter limits on authentication; argon2 concurrency bounded by the libuv pool                                                                                   |
+| Sensitive data in logs                   | pino redaction + test asserting secrets never appear in logs                                                                                                                                                                                                                 |
+| Spoofed client IP                        | `X-Forwarded-For` trusted only from the proxies in `TRUST_PROXY` (hop count or CIDRs, never `true`)                                                                                                                                                                          |
+| Secrets management                       | Config from env / Docker secrets files (`*_FILE`, JWT keys as files); app refuses to start with default or missing secrets in production, or with invalid signing keys                                                                                                       |
+| Supply chain                             | Lockfile, `pnpm audit`, OSV-Scanner, Dependabot, pinned Actions by SHA, SBOM, signed images, provenance                                                                                                                                                                      |
+| Container escape / privilege             | Distroless non-root image, read-only root FS, `no-new-privileges`, dropped capabilities                                                                                                                                                                                      |
 
 ### 5.2 Threat model
 
@@ -184,7 +196,12 @@ Each module: `*.routes.ts` (HTTP + zod schemas) → `*.service.ts` (business rul
 
 ### 5.3 Audit events
 
-`auth.login.succeeded|failed`, `auth.locked`, `auth.refresh.reuse_detected`, `auth.logout`, `member.added|removed|role_changed`, `project.archived`, `workspace.deleted`. Written in the same transaction as the change.
+`auth.registered`, `auth.login.succeeded|failed`, `auth.locked`, `auth.refresh.reuse_detected`, `auth.logout`, `member.invited|added|removed|role_changed`, `invitation.revoked`, `project.archived`, `workspace.deleted`. Written in the same transaction as the change, with actor, workspace, target, client IP and user agent; metadata never holds secrets or the email of an unknown account. Repeating a change that changes nothing records nothing.
+
+- **Append-only**: a trigger rejects `UPDATE` and `TRUNCATE`, and `DELETE` of rows younger than the retention period. No foreign keys, so events outlive what they describe.
+- **Retention: 365 days.** The IP address and user agent are personal data: a year covers incidents discovered late and exceeds the six months the Marco Civil da Internet (art. 15) requires for access records, while staying bounded (LGPD art. 6). The hourly cleanup job, serialized across instances by an advisory lock, deletes older events in batches; the trigger enforces the same limit (`AUDIT_RETENTION_DAYS`, change both together).
+- **Access**: `GET /v1/workspaces/:wsId/audit-events` for owners and admins; authentication events (no workspace) are not exposed by the API.
+- The API's database role can still disable the trigger: separate migration and runtime roles are planned for Phase 5 (threat model RR-5).
 
 ---
 
@@ -208,21 +225,22 @@ Local: `docker compose --profile observability up` adds `grafana/otel-lgtm` (Gra
 
 All env vars validated at startup (zod); invalid config → exit 1 with precise message, no secret values printed. Empty values count as unset; every invalid variable is reported at once.
 
-| Variable                                       | Default                       | Notes                                                                                  |
-| ---------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------- |
-| `NODE_ENV`                                     | `development`                 | `production` enforces strict checks (e.g. rejects empty or default database passwords) |
-| `HOST`                                         | `127.0.0.1`                   | interface to bind; the container image sets `0.0.0.0`                                  |
-| `PORT` / `METRICS_PORT`                        | 3000 / 9464                   |                                                                                        |
-| `DATABASE_URL` (or `DATABASE_URL_FILE`)        | —                             | required, `postgres://` or `postgresql://`; setting both is an error                   |
-| `JWT_PRIVATE_KEY_FILE` / `JWT_PUBLIC_KEY_FILE` | —                             | Ed25519 PEM; `pnpm keys:generate` for dev                                              |
-| `JWT_ISSUER` / `JWT_AUDIENCE`                  | —                             |                                                                                        |
-| `CORS_ORIGINS`                                 | —                             | comma-separated allowlist                                                              |
-| `RATE_LIMIT_*`                                 | sane defaults                 |                                                                                        |
-| `API_DOCS_ENABLED`                             | `true` (dev) / `false` (prod) |                                                                                        |
-| `LOG_LEVEL`                                    | `info`                        | `fatal` · `error` · `warn` · `info` · `debug` · `trace` · `silent`                     |
-| `OTEL_*`                                       | —                             | standard OTel vars                                                                     |
+| Variable                                       | Default                       | Notes                                                                                                              |
+| ---------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `NODE_ENV`                                     | `development`                 | `production` enforces strict checks (e.g. rejects empty or default database passwords)                             |
+| `HOST`                                         | `127.0.0.1`                   | interface to bind; the container image sets `0.0.0.0`                                                              |
+| `PORT` / `METRICS_PORT`                        | 3000 / 9464                   |                                                                                                                    |
+| `DATABASE_URL` (or `DATABASE_URL_FILE`)        | —                             | required, `postgres://` or `postgresql://`; setting both is an error                                               |
+| `JWT_PRIVATE_KEY_FILE` / `JWT_PUBLIC_KEY_FILE` | —                             | Ed25519 PEM; required by the API (not by `migrate`); `pnpm keys:generate` for dev                                  |
+| `JWT_PREVIOUS_PUBLIC_KEY_FILE`                 | —                             | Previous public key, accepted during a key rotation                                                                |
+| `JWT_ISSUER` / `JWT_AUDIENCE`                  | `secure-api-pipeline`         |                                                                                                                    |
+| `CORS_ORIGINS`                                 | —                             | comma-separated origins (`scheme://host[:port]`); https only in production; also allowed to use the refresh cookie |
+| `TRUST_PROXY`                                  | off                           | proxies trusted for `X-Forwarded-For`: a hop count (1–10) or IPs/CIDRs; `true` is refused                          |
+| `API_DOCS_ENABLED`                             | `true` (dev) / `false` (prod) |                                                                                                                    |
+| `LOG_LEVEL`                                    | `info`                        | `fatal` · `error` · `warn` · `info` · `debug` · `trace` · `silent`                                                 |
+| `OTEL_*`                                       | —                             | standard OTel vars                                                                                                 |
 
-`.env.example` documents every variable.
+`.env.example` documents every variable. Rate limits, lockout and token lifetimes are constants changed by review, not configuration (ADR-0004, ADR-0009).
 
 ---
 
@@ -233,6 +251,7 @@ All env vars validated at startup (zod); invalid config → exit 1 with precise 
 - `HEALTHCHECK` via `node dist/healthcheck.js` (no shell in distroless).
 - Labels: OCI (`org.opencontainers.image.source`, `revision`, `version`), set by `container.yml` (Phase 4).
 - Compose (`compose.yaml`): `api`, `migrate` (one-shot, runs before `api`; Phase 1), `postgres`, `nginx` (prod profile, TLS; Phase 5), `otel-lgtm` (observability profile; Phase 3). Ports published on `127.0.0.1` only. API container: `read_only: true`, `tmpfs: /tmp`, `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, resource limits (memory, CPU, PIDs).
+- Access-token signing keys reach the API as Compose secrets (files under `/run/secrets`), never as environment values or image layers.
 
 ---
 
@@ -240,16 +259,16 @@ All env vars validated at startup (zod); invalid config → exit 1 with precise 
 
 All workflows: `permissions:` least privilege at workflow and job level, Actions **pinned by full SHA**, `concurrency` groups, `step-security/harden-runner` in audit mode.
 
-| Workflow             | Trigger                                    | Jobs                                                                                                                                                                                                                      | Blocks merge       |
-| -------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| `ci.yml`             | PR, push main                              | lint (ESLint + Prettier) · typecheck · unit (fast, no Docker) · integration (unit, integration and security suites on Testcontainers; coverage ≥ 85 %) · build (TypeScript, image, Compose smoke test on `/health/ready`) | ✅                 |
-| `pr-title.yml`       | PR (opened, edited, synchronize, reopened) | commitlint on the PR title, which becomes the squash commit read by release-please                                                                                                                                        | ✅                 |
-| `security.yml`       | PR, push main, weekly                      | Semgrep (OWASP + Node rules) · CodeQL · Gitleaks · OSV-Scanner · `pnpm audit --prod` · Trivy fs + config (Dockerfile, compose)                                                                                            | ✅ (HIGH/CRITICAL) |
-| `container.yml`      | PR (build + scan only), push main, release | Build multi-arch (amd64/arm64) · Trivy image (fail on fixable HIGH/CRITICAL) · Syft SBOM (SPDX + CycloneDX) · push GHCR · **cosign keyless sign** (OIDC) · SBOM attestation · `actions/attest-build-provenance` (SLSA)    | ✅ (scan)          |
-| `dast.yml`           | PR, push main                              | Compose up → seed → OWASP ZAP **API scan** using `/openapi.json` with authenticated context → report artifact                                                                                                             | ✅ (High)          |
-| `scorecard.yml`      | push main, weekly                          | OpenSSF Scorecard → SARIF + badge                                                                                                                                                                                         | —                  |
-| `release-please.yml` | push main                                  | Release PR opened with a GitHub App token so its required checks run (ADR-0003), tags, GitHub Release; triggers the container release from Phase 4                                                                        | —                  |
-| `deploy.yml`         | Release published / manual                 | Environment `production` (required reviewer) → see §10                                                                                                                                                                    | —                  |
+| Workflow             | Trigger                                    | Jobs                                                                                                                                                                                                                                                        | Blocks merge       |
+| -------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `ci.yml`             | PR, push main                              | lint (ESLint + Prettier) · typecheck · unit (fast, no Docker) · integration (unit, integration and security suites on Testcontainers; coverage ≥ 85 %) · build (TypeScript, image, Compose smoke test: `/health/ready`, then register, log in and `/v1/me`) | ✅                 |
+| `pr-title.yml`       | PR (opened, edited, synchronize, reopened) | commitlint on the PR title, which becomes the squash commit read by release-please                                                                                                                                                                          | ✅                 |
+| `security.yml`       | PR, push main, weekly                      | Semgrep (OWASP + Node rules) · CodeQL · Gitleaks · OSV-Scanner · `pnpm audit --prod` · Trivy fs + config (Dockerfile, compose)                                                                                                                              | ✅ (HIGH/CRITICAL) |
+| `container.yml`      | PR (build + scan only), push main, release | Build multi-arch (amd64/arm64) · Trivy image (fail on fixable HIGH/CRITICAL) · Syft SBOM (SPDX + CycloneDX) · push GHCR · **cosign keyless sign** (OIDC) · SBOM attestation · `actions/attest-build-provenance` (SLSA)                                      | ✅ (scan)          |
+| `dast.yml`           | PR, push main                              | Compose up → seed → OWASP ZAP **API scan** using `/openapi.json` with authenticated context → report artifact                                                                                                                                               | ✅ (High)          |
+| `scorecard.yml`      | push main, weekly                          | OpenSSF Scorecard → SARIF + badge                                                                                                                                                                                                                           | —                  |
+| `release-please.yml` | push main                                  | Release PR opened with a GitHub App token so its required checks run (ADR-0003), tags, GitHub Release; triggers the container release from Phase 4                                                                                                          | —                  |
+| `deploy.yml`         | Release published / manual                 | Environment `production` (required reviewer) → see §10                                                                                                                                                                                                      | —                  |
 
 All scanners upload **SARIF** to GitHub code scanning. Security tab must stay clean (or findings explicitly dismissed with justification).
 
@@ -279,13 +298,13 @@ Migrations must be **backward compatible** (expand/contract) so rollback of the 
 
 ## 11. Testing strategy
 
-| Level       | Scope                                                                                                                                                                           |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unit        | permission matrix, token logic, password policy, config parsing, problem details, pagination, logging and redaction, plugins                                                    |
-| Integration | every route via `app.inject()` against real PostgreSQL (Testcontainers), migrations applied; services and repositories, whose rules rely on transactions, locks and constraints |
-| Security    | authorization matrix over HTTP (every role × action), cross-tenant access for every resource → 404, refresh reuse detection, lockout, log redaction, headers present            |
-| DAST        | ZAP API scan in CI                                                                                                                                                              |
-| Performance | k6 smoke (CI on main, post-deploy)                                                                                                                                              |
+| Level       | Scope                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit        | permission matrix, token issuance and verification, signing keys, password hashing and policy, config parsing, problem details, pagination, logging and redaction, plugins (headers, CORS, client IP, rate limit), cleanup scheduling                                                                                                                                                 |
+| Integration | every route via `app.inject()` against real PostgreSQL (Testcontainers), migrations applied; services and repositories, whose rules rely on transactions, locks and constraints                                                                                                                                                                                                       |
+| Security    | authorization matrix over HTTP (every role × action) and cross-tenant access for every resource → 404, with real access tokens; refresh reuse detection; lockout and device cookies; identical failures and argon2 cost for unknown, wrong and locked logins; rate limits; CSRF checks; forged, expired and foreign tokens; secrets never in logs or stored in clear; headers present |
+| DAST        | ZAP API scan in CI                                                                                                                                                                                                                                                                                                                                                                    |
+| Performance | k6 smoke (CI on main, post-deploy)                                                                                                                                                                                                                                                                                                                                                    |
 
 Services are not unit-tested with mocked repositories: a mock would assert the calls instead of the behavior that matters (atomic multi-step changes, row locks, foreign keys). Each test file gets its own database, copied from a migrated template, so files run in parallel.
 
@@ -346,12 +365,13 @@ Each phase = one branch → PR → merge → release-please release PR merged (e
 
 **Done when:** all CRUD routes covered by integration tests; authorization matrix test covers every role × action; cross-tenant requests answer 404 for every resource; OpenAPI valid; coverage ≥ 85 %.
 
-### Phase 2 — Authentication & authorization (`feat/auth`, → `v0.2.0`)
+### Phase 2 — Authentication & authorization (`feat/auth`, → `v0.2.0`) ✅
 
-- Register/login/refresh/logout, `/v1/me`, argon2id, EdDSA JWT, refresh rotation + reuse detection, lockout, rate limits (including per user on `POST /members`).
-- JWT authentication replaces the test stub; audit events + endpoint (`audit:read`); invitation flow for members evaluated (`docs/threat-model.md`).
-- Security test suite (§11) completed: refresh reuse, lockout, rate limits; full `docs/threat-model.md`.
-- ADR-0004 token strategy.
+- Register/login/refresh/logout, `/v1/me`, argon2id with a breached-password blocklist, Ed25519 JWT with key rotation, refresh rotation + reuse detection (ADR-0004).
+- Lockout with device cookies, rate limits shared through PostgreSQL, `TRUST_PROXY`, security headers and CORS allowlist (ADR-0009).
+- Bearer authentication replaces the test stub; audit events in the same transaction, append-only with 365-day retention, and their endpoint (`audit:read`).
+- Invitation links replace adding members by email, a breaking change (ADR-0010).
+- Security test suite (§11) completed; full `docs/threat-model.md`.
 
 **Done when:** the authorization-matrix and cross-tenant suites run with real tokens; reuse detection revokes the family; lockout and rate limits are covered by tests; audit events are written in the same transaction as the change.
 
@@ -367,6 +387,7 @@ Each phase = one branch → PR → merge → release-please release PR merged (e
 - Hardened distroless image, `security.yml`, `container.yml` (Trivy, SBOM, cosign, provenance, GHCR), `dast.yml` (ZAP), `scorecard.yml`, harden-runner, SHA-pinned actions.
 - Required checks updated; `docs/security-pipeline.md` (diagram + what each gate catches + how to verify an image with cosign).
 - ADR-0007 supply-chain strategy.
+- The distroless runtime uses glibc while the dependency stage is Alpine (musl): install the `@node-rs/argon2` binary for the runtime's libc (pnpm `supportedArchitectures`).
 
 **Done when:** a release image in GHCR verifies with `cosign verify` and `gh attestation verify`; SBOM attached; all scanners report to the Security tab; Scorecard badge published.
 
@@ -375,6 +396,7 @@ Each phase = one branch → PR → merge → release-please release PR merged (e
 - `deploy/`, `deploy.yml` with environment approval, cosign verification on server, migrations, k6 smoke, automatic rollback.
 - `docs/runbook.md` (deploy, rollback, rotate JWT keys, incident steps), ecosystem diagram in README, `drkit` `dr.yaml` example.
 - ADR-0008 expand/contract migrations.
+- Separate PostgreSQL roles: a migration role that owns the schema, and a runtime role with only what the API needs, without `UPDATE` or `DELETE` on `audit_events`; expired events deleted through a dedicated role or a `SECURITY DEFINER` function (threat model RR-5).
 
 **Done when:** a release deploys to the VPS end-to-end; a deliberately broken release is rolled back automatically (documented with screenshots/logs); README "Pipeline" section reflects real runs.
 
@@ -382,15 +404,17 @@ Each phase = one branch → PR → merge → release-please release PR merged (e
 
 ## 14. ADR index
 
-| #    | Title                                                        |
-| ---- | ------------------------------------------------------------ |
-| 0001 | Fastify with zod type provider                               |
-| 0002 | Drizzle ORM with reviewed SQL migrations                     |
-| 0003 | pnpm and release-please for versioning                       |
-| 0004 | Token strategy: short JWT + rotating opaque refresh tokens   |
-| 0005 | Tenant isolation enforced at repository layer                |
-| 0006 | OpenTelemetry for traces and metrics                         |
-| 0007 | Supply-chain security: SBOM, cosign keyless, SLSA provenance |
-| 0008 | Expand/contract migrations for safe rollbacks                |
+| #    | Title                                                           |
+| ---- | --------------------------------------------------------------- |
+| 0001 | Fastify with zod type provider                                  |
+| 0002 | Drizzle ORM with reviewed SQL migrations                        |
+| 0003 | pnpm and release-please for versioning                          |
+| 0004 | Token strategy: short JWT + rotating opaque refresh tokens      |
+| 0005 | Tenant isolation enforced at repository layer                   |
+| 0006 | OpenTelemetry for traces and metrics                            |
+| 0007 | Supply-chain security: SBOM, cosign keyless, SLSA provenance    |
+| 0008 | Expand/contract migrations for safe rollbacks                   |
+| 0009 | Brute-force protection: rate limits, lockout and device cookies |
+| 0010 | Member invitations by single-use link                           |
 
 Format: Context · Decision · Alternatives considered · Consequences.
