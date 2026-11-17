@@ -17,6 +17,7 @@ const PROBLEM_DESCRIPTIONS = {
   403: 'The caller’s role does not allow the action',
   404: 'Not found, or not visible to the caller',
   409: 'Conflict with the current state',
+  429: 'Rate limit exceeded; retry after the `Retry-After` delay',
 } as const;
 
 type ProblemStatus = keyof typeof PROBLEM_DESCRIPTIONS;

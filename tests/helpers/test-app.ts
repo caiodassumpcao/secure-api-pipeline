@@ -6,12 +6,14 @@ import { createPasswordHasher } from '../../src/modules/auth/password.ts';
 import type { TokenService } from '../../src/modules/auth/tokens.ts';
 import { createTestTokenService } from './keys.ts';
 import { LogCapture } from './log-capture.ts';
+import { unlimited } from '../../src/lib/rate-limiter.ts';
 
 export interface TestAppOptions {
   ping?: () => Promise<void>;
   migrationsApplied?: () => Promise<boolean>;
   tokens?: TokenService;
   docs?: boolean;
+  globalRateLimit?: boolean;
   http?: Partial<AppDependencies['http']>;
 }
 
@@ -32,6 +34,7 @@ export async function buildTestApp(options: TestAppOptions = {}) {
       passwords: createPasswordHasher(),
     },
     docs: { enabled: options.docs ?? false },
+    limits: { limiter: unlimited, global: options.globalRateLimit ?? false },
     http: { corsOrigins: [], trustProxy: false, ...options.http },
   });
   return { app, logs, ping, migrationsApplied };

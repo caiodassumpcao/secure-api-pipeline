@@ -2,7 +2,9 @@ import { buildApp } from './app.ts';
 import { loadConfigOrExit, loadSigningKeysOrExit } from './config/load-or-exit.ts';
 import { createDatabase } from './db/database.ts';
 import { latestMigration } from './db/migrations.ts';
+import { runCleanup, scheduleCleanup } from './jobs/cleanup.ts';
 import { createLogger } from './lib/logger.ts';
+import { createRateLimiter } from './lib/rate-limiter.ts';
 import { registerGracefulShutdown } from './lib/shutdown.ts';
 import { createPasswordHasher } from './modules/auth/password.ts';
 import { createTokenService } from './modules/auth/tokens.ts';
@@ -25,10 +27,14 @@ const app = await buildApp({
   database,
   auth: { tokens, passwords: createPasswordHasher() },
   docs: config.docs,
+  limits: { limiter: createRateLimiter(database.db), global: true },
   http: { corsOrigins: config.cors.origins, trustProxy: config.trustProxy },
 });
 
+const cleanup = scheduleCleanup(() => runCleanup(database.db), logger);
+
 app.addHook('onClose', async () => {
+  cleanup.stop();
   await database.close();
 });
 

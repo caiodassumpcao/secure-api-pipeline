@@ -60,6 +60,10 @@ Responses never contain stack traces, SQL or internal hostnames. Server errors a
 
 **415** — The `content-type` is not supported. Request bodies must be `application/json`; `text/plain` and other types are rejected.
 
+## `too-many-requests`
+
+**429** — Too many requests from this client (IP address, account or email address) in the current window. The `Retry-After` header gives the number of seconds to wait. Limits protect authentication and invitations in particular (ADR-0009).
+
 ## `internal-error`
 
 **500** — An unexpected error occurred on the server. The response carries no details; use the `traceId` to find them in the logs. Safe to retry for idempotent requests.

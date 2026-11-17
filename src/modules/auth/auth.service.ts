@@ -3,13 +3,14 @@ import { isUniqueViolation } from '../../db/errors.ts';
 import type { Role } from '../../db/schema.ts';
 import { uuidv7 } from '../../lib/ids.ts';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
+import type { RateLimiter } from '../../lib/rate-limiter.ts';
 import { createMembersRepository } from '../members/members.repository.ts';
 import { createWorkspacesRepository } from '../workspaces/workspaces.repository.ts';
 
 /** Memberships listed by `/v1/me`; `/v1/workspaces` paginates through all of them. */
 export const ME_MEMBERSHIPS_LIMIT = 100;
 import { createAuthRepository, type UserRow } from './auth.repository.ts';
-import { DEVICE_TTL_MS, REFRESH_TOKEN_TTL_MS, SESSION_TTL_MS } from './policy.ts';
+import { DEVICE_TTL_MS, LOGIN_PER_EMAIL, REFRESH_TOKEN_TTL_MS, SESSION_TTL_MS } from './policy.ts';
 import { passwordPolicyIssues, type PasswordHasher } from './password.ts';
 import type { TokenService } from './tokens.ts';
 
@@ -24,6 +25,7 @@ export interface AuthServiceDependencies {
   readonly db: Db;
   readonly passwords: PasswordHasher;
   readonly tokens: TokenService;
+  readonly limiter: RateLimiter;
 }
 
 export interface Me extends User {
@@ -53,6 +55,7 @@ export type LoginResult =
       /** A new device cookie to set, when the client had no valid one. */
       readonly deviceToken: string | undefined;
     })
+  | { readonly status: 'rate_limited'; readonly retryAfterSeconds: number }
   | {
       readonly status: 'failed';
       /** The device cookie was presented with too many wrong passwords and is revoked. */
@@ -68,7 +71,7 @@ export type RefreshResult =
     }
   | { readonly status: 'reuse_detected'; readonly userId: string; readonly familyId: string };
 
-export function createAuthService({ db, passwords, tokens }: AuthServiceDependencies) {
+export function createAuthService({ db, passwords, tokens, limiter }: AuthServiceDependencies) {
   const repository = createAuthRepository(db);
 
   return {
@@ -134,6 +137,13 @@ export function createAuthService({ db, passwords, tokens }: AuthServiceDependen
         credentials !== undefined && client.deviceToken !== undefined
           ? await repository.findDevice(credentials.id, client.deviceToken)
           : undefined;
+      if (device === undefined) {
+        // Counted whether or not the account exists, so the limit reveals nothing.
+        const limit = await limiter.hit(LOGIN_PER_EMAIL, input.email);
+        if (!limit.allowed) {
+          return { status: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds };
+        }
+      }
       const lockedOut = credentials !== undefined && credentials.locked && device === undefined;
       const usable = credentials !== undefined && !lockedOut;
 

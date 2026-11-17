@@ -1,6 +1,7 @@
 import type { FastifyPluginCallbackZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
+import { rateLimitBy, tooManyRequests, type RateLimiter } from '../../lib/rate-limiter.ts';
 import { ROLES } from '../../db/schema.ts';
 import { idSchema, noContentSchema, problemResponses, timestampSchema } from '../../lib/schemas.ts';
 import { currentUser } from '../../plugins/authentication.ts';
@@ -15,7 +16,13 @@ import {
   setRefreshCookie,
 } from './cookies.ts';
 import { assertNotCrossSite } from './csrf.ts';
-import { DEVICE_TTL_MS, REFRESH_TOKEN_TTL_MS } from './policy.ts';
+import {
+  DEVICE_TTL_MS,
+  LOGIN_PER_IP,
+  REFRESH_PER_IP,
+  REFRESH_TOKEN_TTL_MS,
+  REGISTER_PER_IP,
+} from './policy.ts';
 
 export const emailSchema = z.string().trim().toLowerCase().pipe(z.email().max(254));
 
@@ -51,6 +58,7 @@ export interface AuthRoutesOptions {
   readonly service: AuthService;
   /** Browser origins allowed to use the refresh cookie, besides the API's own. */
   readonly allowedOrigins: readonly string[];
+  readonly limiter: RateLimiter;
 }
 
 const refreshCookieSecurity = [{ refreshCookie: [] }];
@@ -58,7 +66,7 @@ const refreshCookieSecurity = [{ refreshCookie: [] }];
 /** Public routes under `/v1/auth`: no access token needed. */
 export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
   app,
-  { service, allowedOrigins },
+  { service, allowedOrigins, limiter },
   done,
 ) => {
   app.post(
@@ -77,8 +85,9 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
             name: z.string().trim().min(1).max(100),
           })
           .strict(),
-        response: { 201: userSchema, ...problemResponses(400, 409) },
+        response: { 201: userSchema, ...problemResponses(400, 409, 429) },
       },
+      preHandler: rateLimitBy(limiter, REGISTER_PER_IP, (request) => request.ip),
     },
     async (request, reply) => {
       const user = await service.register(request.body);
@@ -96,13 +105,18 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
           'Also sets a device cookie: clients that already logged in are not locked out when someone else keeps failing to log in to the account.',
         security: [],
         body: z.object({ email: emailSchema, password: passwordSchema }).strict(),
-        response: { 200: accessTokenSchema, ...problemResponses(400, 401) },
+        response: { 200: accessTokenSchema, ...problemResponses(400, 401, 429) },
       },
+      preHandler: rateLimitBy(limiter, LOGIN_PER_IP, (request) => request.ip),
     },
     async (request, reply) => {
       const result = await service.login(request.body, {
         deviceToken: readTokenCookie(request, DEVICE_COOKIE),
       });
+      if (result.status === 'rate_limited') {
+        reply.header('retry-after', String(result.retryAfterSeconds));
+        throw tooManyRequests(result.retryAfterSeconds);
+      }
       if (result.status === 'failed') {
         if (result.deviceRevoked) clearDeviceCookie(reply);
         reply.header('www-authenticate', CHALLENGE);
@@ -129,8 +143,9 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
         description:
           'Each refresh token works once. Presenting one that was already exchanged ends the whole session (reuse detection), unless it was exchanged in the last seconds.',
         security: refreshCookieSecurity,
-        response: { 200: accessTokenSchema, ...problemResponses(401, 403) },
+        response: { 200: accessTokenSchema, ...problemResponses(401, 403, 429) },
       },
+      preHandler: rateLimitBy(limiter, REFRESH_PER_IP, (request) => request.ip),
     },
     async (request, reply) => {
       assertNotCrossSite(request, allowedOrigins);

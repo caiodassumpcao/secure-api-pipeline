@@ -8,6 +8,7 @@ import { createPasswordHasher, type PasswordHasher } from '../../../src/modules/
 import type { TokenService } from '../../../src/modules/auth/tokens.ts';
 import { createTestTokenService } from '../../helpers/keys.ts';
 import { createTestDatabase, type TestDatabase } from './database.ts';
+import { createRateLimiter, unlimited } from '../../../src/lib/rate-limiter.ts';
 
 export interface TestUser {
   readonly id: string;
@@ -51,7 +52,10 @@ export class TestApi {
     this.tokens = tokens;
   }
 
-  static async start(options: { passwords?: PasswordHasher } = {}): Promise<TestApi> {
+  /** `rateLimits`: enforce the real limits, off by default (suites send hundreds of requests). */
+  static async start(
+    options: { passwords?: PasswordHasher; rateLimits?: boolean } = {},
+  ): Promise<TestApi> {
     const testDatabase = await createTestDatabase();
     const tokens = await createTestTokenService();
     const app = await buildApp({
@@ -59,6 +63,10 @@ export class TestApi {
       database: testDatabase.database,
       auth: { tokens, passwords: options.passwords ?? createPasswordHasher() },
       docs: { enabled: false },
+      limits:
+        options.rateLimits === true
+          ? { limiter: createRateLimiter(testDatabase.database.db), global: true }
+          : { limiter: unlimited, global: false },
       http: { corsOrigins: [], trustProxy: false },
     });
     await app.ready();

@@ -20,3 +20,10 @@ export const SESSION_TTL_MS = 30 * DAY;
  * session: two tabs refreshing at once is not an attack.
  */
 export const REFRESH_REUSE_GRACE_MS = 10_000;
+
+/** Rate limits of the authentication routes (ADR-0009), counted in PostgreSQL. */
+export const LOGIN_PER_IP = { name: 'login-ip', max: 10, windowMs: MINUTE } as const;
+/** Applies to clients without a valid device cookie only, like the lockout. */
+export const LOGIN_PER_EMAIL = { name: 'login-email', max: 5, windowMs: MINUTE } as const;
+export const REGISTER_PER_IP = { name: 'register-ip', max: 5, windowMs: 60 * MINUTE } as const;
+export const REFRESH_PER_IP = { name: 'refresh-ip', max: 30, windowMs: MINUTE } as const;

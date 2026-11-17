@@ -6,6 +6,7 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import type { TrustProxy } from './config/config.ts';
+import type { RateLimiter } from './lib/rate-limiter.ts';
 import type { Db } from './db/database.ts';
 import { healthRoutes, type ReadinessProbe } from './modules/health/health.routes.ts';
 import { memberRoutes } from './modules/members/members.routes.ts';
@@ -23,6 +24,7 @@ import type { TokenService } from './modules/auth/tokens.ts';
 import { createBearerAuthenticator, registerAuthentication } from './plugins/authentication.ts';
 import { frameworkErrorHandler, registerErrorHandler } from './plugins/error-handler.ts';
 import { registerOpenApi } from './plugins/openapi.ts';
+import { registerGlobalRateLimit } from './plugins/rate-limit.ts';
 import { generateRequestId, registerRequestIdHeader } from './plugins/request-id.ts';
 import { registerSecurity, trustProxyOption } from './plugins/security.ts';
 
@@ -42,6 +44,12 @@ export interface AppDependencies {
   };
   /** Serve `/docs` and `/openapi.json` (off in production unless enabled). */
   readonly docs: { readonly enabled: boolean };
+  readonly limits: {
+    /** Shared counters for the sensitive routes (PostgreSQL in production). */
+    readonly limiter: RateLimiter;
+    /** Coarse in-memory per-IP limit on every route. */
+    readonly global: boolean;
+  };
   readonly http: {
     /** Browser origins allowed by CORS. */
     readonly corsOrigins: readonly string[];
@@ -54,7 +62,7 @@ export interface AppDependencies {
  * Creates the Fastify instance with all plugins and routes, without listening.
  * Tests use it with `app.inject()`; `main.ts` adds the process lifecycle.
  */
-export async function buildApp({ logger, database, auth, docs, http }: AppDependencies) {
+export async function buildApp({ logger, database, auth, docs, limits, http }: AppDependencies) {
   const app = Fastify({
     loggerInstance: logger,
     genReqId: generateRequestId,
@@ -76,17 +84,19 @@ export async function buildApp({ logger, database, auth, docs, http }: AppDepend
   await registerSecurity(app, { corsOrigins: http.corsOrigins });
   // Unsigned: cookie values are random tokens checked against their stored hash.
   await app.register(cookie);
+  if (limits.global) await registerGlobalRateLimit(app);
 
   // Before any route, so every route is documented.
   if (docs.enabled) await registerOpenApi(app);
 
   await app.register(healthRoutes, { database });
 
-  const authService = createAuthService({ db: database.db, ...auth });
+  const authService = createAuthService({ db: database.db, ...auth, limiter: limits.limiter });
   await app.register(authRoutes, {
     prefix: '/v1/auth',
     service: authService,
     allowedOrigins: http.corsOrigins,
+    limiter: limits.limiter,
   });
 
   await app.register(
