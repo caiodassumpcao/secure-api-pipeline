@@ -11,6 +11,7 @@ import { loadTelemetryConfig, type TelemetryConfig } from './config.ts';
 
 /** Libraries imported by the app as ESM whose instrumentation patches them. */
 const INSTRUMENTED_MODULES = ['pg', 'pino'];
+import { createInstrumentations } from './instrumentations.ts';
 import { startTelemetry } from './sdk.ts';
 
 async function exitWithInvalidConfig(error: unknown): Promise<never> {
@@ -33,7 +34,7 @@ if (config.enabled) {
   // ESM imports of the instrumented libraries; CommonJS ones (Fastify's http,
   // pg-pool) are patched through require.
   register({ include: INSTRUMENTED_MODULES });
-  startTelemetry(config);
+  startTelemetry(config, { instrumentations: createInstrumentations() });
 
   // Loaded after the SDK started, so the instrumented pino is the one used.
   const { createLogger } = await import('../lib/logger.ts');

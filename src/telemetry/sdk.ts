@@ -14,6 +14,7 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { z } from 'zod';
 import type { TelemetryConfig } from './config.ts';
+import { RedactingSpanExporter } from './redaction.ts';
 
 /** `package.json` two levels up from both `src/telemetry` and `dist/telemetry`. */
 const packageJson = new URL('../../package.json', import.meta.url);
@@ -52,7 +53,13 @@ function spanProcessors(config: TelemetryConfig, overrides: TelemetryOverrides):
   // their trace ids; they are just not sent anywhere.
   return exporter === undefined
     ? [new NoopSpanProcessor()]
-    : [new BatchSpanProcessor({ exporter, maxQueueSize: 2_048, exportTimeoutMillis: 10_000 })];
+    : [
+        new BatchSpanProcessor({
+          exporter: new RedactingSpanExporter(exporter),
+          maxQueueSize: 2_048,
+          exportTimeoutMillis: 10_000,
+        }),
+      ];
 }
 
 /**
