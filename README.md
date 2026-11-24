@@ -103,7 +103,7 @@ mkdir -p keys && openssl genpkey -algorithm ed25519 -out keys/jwt-private.pem
 openssl pkey -in keys/jwt-private.pem -pubout -out keys/jwt-public.pem
 ```
 
-The container runs as uid 1000: on Linux, if your uid differs, make these development keys readable by it (`chmod 644 keys/jwt-private.pem`).
+The container runs as uid 65532 (distroless `nonroot`): on Linux, make the development private key readable by it (`chmod 644 keys/jwt-private.pem`); `pnpm keys:generate` writes it for your user only.
 
 With local observability (Grafana, Tempo, Loki, Prometheus and a provisioned dashboard):
 

@@ -28,7 +28,8 @@ services:
   migrate:
     build: .
     image: secure-api-pipeline:local
-    command: [node, dist/migrate.js]
+    # The image's entrypoint is node: the script alone, without the telemetry preload.
+    command: [dist/migrate.js]
     environment:
       NODE_ENV: development
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -123,7 +124,7 @@ volumes:
   postgres-data:
 
 # Development key pair from `pnpm keys:generate` (git-ignored). Compose mounts
-# the files as they are: the container user (uid 1000) must be able to read them.
+# the files as they are: the container user (uid 65532) must be able to read them.
 secrets:
   jwt_private_key:
     file: ./keys/jwt-private.pem
