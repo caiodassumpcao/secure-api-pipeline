@@ -253,7 +253,8 @@ jobs:
         uses: ./.github/actions/setup
 
       # Development values (every trace kept), the observability profile on,
-      # and metrics pushed every 5 seconds.
+      # metrics pushed every 5 seconds, and Loki and the collector logging so
+      # a failure can be diagnosed.
       - name: Prepare environment
         if: ${{ steps.run.outputs.smoke == 'true' }}
         run: |
@@ -262,6 +263,8 @@ jobs:
             echo 'COMPOSE_PROFILES=observability'
             echo 'API_OTLP_ENDPOINT=http://otel-lgtm:4318'
             echo 'OTEL_METRIC_EXPORT_INTERVAL=5000'
+            echo 'ENABLE_LOGS_LOKI=true'
+            echo 'ENABLE_LOGS_OTELCOL=true'
           } >> .env
 
       - name: Generate signing keys
@@ -282,9 +285,33 @@ jobs:
         if: ${{ steps.run.outputs.smoke == 'true' }}
         run: pnpm smoke:observability
 
-      - name: Show logs
+      # The API never logs credentials (security suite). Bearer tokens, JWTs
+      # and session cookies are masked here anyway, and nothing is kept if one
+      # is left.
+      - name: Collect logs
         if: ${{ failure() && steps.run.outputs.smoke == 'true' }}
-        run: docker compose logs
+        run: |
+          docker compose logs --no-color --timestamps \
+            | sed -E \
+              -e 's/(bearer )[A-Za-z0-9._~+\/=-]+/\1[REDACTED]/Ig' \
+              -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/[REDACTED]/g' \
+              -e 's/(__Secure-[A-Za-z-]+=)[^;", ]+/\1[REDACTED]/g' \
+              -e 's/("(authorization|cookie|set-cookie)" *: *")[^"]*/\1[REDACTED]/Ig' \
+            > compose-logs.txt
+          if grep -qiE 'bearer [a-z0-9]|eyJ[A-Za-z0-9_-]{8,}\.|__Secure-[A-Za-z-]+=[^[]' compose-logs.txt; then
+            rm compose-logs.txt
+            echo '::error::A credential-like value is left in the logs: not kept.'
+            exit 1
+          fi
+          cat compose-logs.txt
+
+      - name: Upload logs
+        if: ${{ failure() && steps.run.outputs.smoke == 'true' && hashFiles('compose-logs.txt') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compose-logs-${{ github.run_attempt }}
+          path: compose-logs.txt
+          retention-days: 3
 
       - name: Stop stack
         if: ${{ always() && steps.run.outputs.smoke == 'true' }}
