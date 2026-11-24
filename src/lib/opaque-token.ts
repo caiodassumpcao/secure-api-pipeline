@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { z } from 'zod';
+import { textSchema } from './schemas.ts';
 
 /**
  * Random bearer secret (refresh tokens, device cookies, invitation links):
@@ -16,4 +16,4 @@ export function hashOpaqueToken(token: string): string {
 }
 
 /** Shape of a token from {@link generateOpaqueToken}; anything else is rejected unread. */
-export const opaqueTokenSchema = z.string().regex(/^[\w-]{43}$/);
+export const opaqueTokenSchema = textSchema.regex(/^[\w-]{43}$/);

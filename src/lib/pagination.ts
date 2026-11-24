@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { textSchema } from './schemas.ts';
 
 export const DEFAULT_PAGE_SIZE = 20;
 export const MAX_PAGE_SIZE = 100;
@@ -37,8 +38,7 @@ export const paginationQuery = {
     .max(MAX_PAGE_SIZE)
     .default(DEFAULT_PAGE_SIZE)
     .describe(`Page size, 1–${MAX_PAGE_SIZE}.`),
-  cursor: z
-    .string()
+  cursor: textSchema
     .max(256)
     .transform((value, ctx) => {
       const key = decodeCursor(value);
