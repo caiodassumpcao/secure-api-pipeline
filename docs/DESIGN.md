@@ -401,7 +401,7 @@ Each phase = one branch → PR → merge → release-please release PR merged (e
 
 **Done when:** a request produces a trace (HTTP → service → pg span), latency histogram with route labels, and a log line with matching `trace_id`, visible in local Grafana.
 
-### Phase 4 — DevSecOps pipeline (`feat/security-pipeline`, → `v0.4.0`)
+### Phase 4 — DevSecOps pipeline (`feat/security-pipeline`, → `v0.4.0`) ✅
 
 - Hardened distroless image, `security.yml`, `container.yml` (Trivy, SBOM, cosign, provenance, GHCR), `dast.yml` (ZAP), `scorecard.yml`, harden-runner, SHA-pinned actions.
 - Required checks updated; `docs/security-pipeline.md` (diagram + what each gate catches + how to verify an image with cosign).

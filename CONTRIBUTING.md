@@ -39,7 +39,7 @@ To run the whole stack in containers instead: `docker compose up -d --build --wa
 | `pnpm keys:generate`       | Writes a development Ed25519 key pair for access tokens to `keys/`                                   |
 | `pnpm smoke:observability` | Checks traces, logs, metrics and the dashboard in the local Grafana ([guide](docs/observability.md)) |
 
-Run `pnpm lint && pnpm typecheck && pnpm test` before every push, and `pnpm test:integration` when a change touches data or routes; CI runs all of them. Generated migrations are reviewed like code: expand/contract, no destructive statement in the same release as the code that stops using a column.
+Run `pnpm lint && pnpm typecheck && pnpm test` before every push, and `pnpm test:integration` when a change touches data or routes; CI runs all of them, plus the security scans, the image checks and the DAST scan described in [docs/security-pipeline.md](docs/security-pipeline.md). A finding that blocks is fixed, or recorded as an exception with its reason in that document; alerts are never dismissed silently. Generated migrations are reviewed like code: expand/contract, no destructive statement in the same release as the code that stops using a column.
 
 ## Branches, commits and pull requests
 
