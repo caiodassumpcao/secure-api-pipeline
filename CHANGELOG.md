@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/caiodassumpcao/secure-api-pipeline/compare/v0.3.0...v0.3.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **deps:** bump the production group across 1 directory with 4 updates ([#13](https://github.com/caiodassumpcao/secure-api-pipeline/issues/13)) ([6ae5c05](https://github.com/caiodassumpcao/secure-api-pipeline/commit/6ae5c0534e17a8f46ec6844ee00cefb4db84825d))
+
 ## [0.3.0](https://github.com/caiodassumpcao/secure-api-pipeline/compare/v0.2.0...v0.3.0) (2026-11-24)
 
 
