@@ -136,9 +136,10 @@ jobs:
             index:org.opencontainers.image.version=${{ steps.meta.outputs.version }}
             index:org.opencontainers.image.licenses=MIT
 
-      # One archive per platform for the scanners, the amd64 image in the
-      # local daemon, and the arm64 image as a docker archive for the native
-      # arm64 runner (which has no skopeo).
+      # One OCI layout directory per platform for the scanners (Trivy reads
+      # layout directories and docker archives, not OCI archives), the amd64
+      # image in the local daemon, and the arm64 image as a docker archive
+      # for the native arm64 runner (which has no skopeo).
       - name: Split the archive
         if: ${{ steps.run.outputs.build == 'true' }}
         shell: bash
@@ -146,10 +147,10 @@ jobs:
           cd reports/image
           for arch in amd64 arm64; do
             skopeo copy --quiet --override-arch "$arch" --preserve-digests \
-              oci-archive:image.tar "oci-archive:image-$arch.tar"
+              oci-archive:image.tar "oci:image-$arch"
           done
-          skopeo copy --quiet "oci-archive:image-amd64.tar" "docker-daemon:$LOCAL_IMAGE"
-          skopeo copy --quiet "oci-archive:image-arm64.tar" "docker-archive:image-arm64.docker.tar:$LOCAL_IMAGE"
+          skopeo copy --quiet "oci:image-amd64" "docker-daemon:$LOCAL_IMAGE"
+          skopeo copy --quiet "oci:image-arm64" "docker-archive:image-arm64.docker.tar:$LOCAL_IMAGE"
           skopeo inspect --raw oci-archive:image.tar | sha256sum | awk '{print "index digest: sha256:" $1}' >> "$GITHUB_STEP_SUMMARY"
 
       # Throwaway development stack around the image itself.
@@ -178,7 +179,7 @@ jobs:
         if: ${{ steps.run.outputs.build == 'true' }}
         run: |
           for arch in amd64 arm64; do
-            $SCAN trivy image --input "reports/image/image-$arch.tar" --scanners vuln \
+            $SCAN trivy image --input "reports/image/image-$arch" --scanners vuln \
               --ignorefile .trivyignore.yaml --format sarif --output "reports/trivy-image-$arch.sarif"
           done
 
@@ -200,7 +201,7 @@ jobs:
         if: ${{ steps.run.outputs.build == 'true' }}
         run: |
           for arch in amd64 arm64; do
-            $SCAN syft scan "oci-archive:reports/image/image-$arch.tar" \
+            $SCAN syft scan "oci-dir:reports/image/image-$arch" \
               --output "spdx-json=reports/image/sbom-$arch.spdx.json" \
               --output "cyclonedx-json=reports/image/sbom-$arch.cdx.json"
           done
@@ -222,7 +223,7 @@ jobs:
         run: |
           status=0
           for arch in amd64 arm64; do
-            $SCAN trivy image --input "reports/image/image-$arch.tar" --scanners vuln \
+            $SCAN trivy image --input "reports/image/image-$arch" --scanners vuln \
               --ignorefile .trivyignore.yaml --skip-db-update \
               --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 || status=1
           done
