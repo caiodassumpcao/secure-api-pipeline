@@ -62,6 +62,31 @@ describe('compose.yaml', () => {
   });
 });
 
+describe('.github/scanners/compose.yaml', () => {
+  const scanners = parse(readFileSync(new URL('.github/scanners/compose.yaml', root), 'utf8')) as {
+    services: Record<string, Service & { network_mode?: string }>;
+  };
+  const entries = Object.entries(scanners.services);
+
+  it('declares every scanner the workflows run', () => {
+    expect(entries.map(([name]) => name).sort()).toEqual(
+      ['gitleaks', 'osv-scanner', 'semgrep', 'syft', 'trivy', 'zap'].sort(),
+    );
+  });
+
+  it.each(entries)('%s pins its image by tag and digest, publishes nothing', (_name, service) => {
+    expect(service.image).toMatch(/^[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}$/);
+    expect(service.build).toBeUndefined();
+    expect(service.ports ?? []).toEqual([]);
+  });
+
+  it('gives the host network to ZAP only, which scans the stack on 127.0.0.1', () => {
+    expect(
+      entries.filter(([, service]) => service.network_mode === 'host').map(([name]) => name),
+    ).toEqual(['zap']);
+  });
+});
+
 interface Panel {
   type: string;
   title: string;

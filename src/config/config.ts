@@ -21,6 +21,12 @@ export interface Config {
    * count or a list of addresses and CIDR ranges. Off (`false`) by default.
    */
   readonly trustProxy: TrustProxy;
+  /**
+   * Factor applied to every rate limit, 1 by default. Only test environments
+   * raise it (the DAST stack, so the scanner is not answered 429); production
+   * refuses any other value.
+   */
+  readonly rateLimit: { readonly multiplier: number };
 }
 
 export type TrustProxy = false | number | readonly string[];
@@ -119,6 +125,12 @@ const envSchema = z
     // `true` (trust any proxy) is deliberately not accepted: it would let any
     // client choose its IP and evade per-IP rate limits.
     TRUST_PROXY: trustProxySchema.optional(),
+    RATE_LIMIT_MULTIPLIER: z.coerce
+      .number({ error: 'must be an integer from 1 to 1000' })
+      .int({ error: 'must be an integer from 1 to 1000' })
+      .min(1, { error: 'must be an integer from 1 to 1000' })
+      .max(1000, { error: 'must be an integer from 1 to 1000' })
+      .default(1),
     // Error messages must never echo the value: the URL carries credentials.
     DATABASE_URL: z.url({
       protocol: /^postgres(ql)?$/,
@@ -127,6 +139,13 @@ const envSchema = z
     }),
   })
   .superRefine((env, ctx) => {
+    if (env.NODE_ENV === 'production' && env.RATE_LIMIT_MULTIPLIER !== 1) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['RATE_LIMIT_MULTIPLIER'],
+        message: 'must be 1 in production: it raises rate limits for test environments only',
+      });
+    }
     if (
       env.NODE_ENV === 'production' &&
       env.CORS_ORIGINS?.some((origin) => !origin.startsWith('https:'))
@@ -248,5 +267,6 @@ export function loadConfig(
     },
     cors: { origins: parsed.CORS_ORIGINS ?? [] },
     trustProxy: parsed.TRUST_PROXY ?? false,
+    rateLimit: { multiplier: parsed.RATE_LIMIT_MULTIPLIER },
   };
 }

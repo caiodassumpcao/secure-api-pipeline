@@ -1,6 +1,6 @@
 # Threat model
 
-> Status: **v0.3**. Covers the API, its data and its telemetry as built today, plus the delivery chain the roadmap adds (CI/CD in v0.4, deployment in v1.0), whose controls are marked with the version that brings them. Controls are summarized in [DESIGN §5.1](DESIGN.md#51-controls); decisions are in the [ADRs](adr/).
+> Status: **v0.4**. Covers the API, its data and its telemetry as built today, plus the delivery chain the roadmap adds (CI/CD in v0.4, deployment in v1.0), whose controls are marked with the version that brings them. Controls are summarized in [DESIGN §5.1](DESIGN.md#51-controls); decisions are in the [ADRs](adr/).
 
 ## Data flow and trust boundaries
 
@@ -57,7 +57,7 @@ Trust boundaries: **Internet → Nginx** (everything from the client is hostile 
 
 | Threat                     | Scenario                                                     | Mitigations                                                                                                                                                                                                                                                                                                                     |
 | -------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **S**poofing               | Credential stuffing, brute force                             | argon2id; rate limits per IP and per email, shared by instances; lockout after 10 failures for clients without a device cookie (ADR-0009); identical 401 and argon2 cost for unknown, wrong and locked                                                                                                                          |
+| **S**poofing               | Credential stuffing, brute force                             | argon2id; rate limits per IP and per email, shared by instances; lockout after 10 failures for clients without a device cookie (ADR-0009); identical 401 and argon2 cost for unknown, wrong and locked; `RATE_LIMIT_MULTIPLIER`, which raises every limit for the DAST stack, is refused in production and logged when above 1  |
 |                            | Stolen refresh token                                         | Rotation on every use; reuse of an exchanged token revokes the whole session and is audited; 7-day idle and 30-day absolute lifetime; `HttpOnly`, `SameSite=Strict`, `__Secure-` cookie limited to `/v1/auth` (ADR-0004)                                                                                                        |
 |                            | Forged or replayed access token                              | Ed25519 signature, algorithm, `typ`, issuer and audience pinned; 15-minute lifetime; the key id selects among the current and previous public keys only                                                                                                                                                                         |
 |                            | Forged trace context (`traceparent`)                         | Inbound trace context ignored: a client can neither join its requests to a chosen trace nor force sampling (ADR-0006)                                                                                                                                                                                                           |
@@ -102,12 +102,20 @@ Trust boundaries: **Internet → Nginx** (everything from the client is hostile 
 
 ### CI/CD and registry (v0.4, v1.0)
 
-| Threat                      | Mitigations                                                                                                                                                 |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Malicious dependency        | Lockfile, 3-day release age, no install scripts unless approved, overrides for vulnerable transitive versions, Dependabot, `pnpm audit`, OSV-Scanner (v0.4) |
-| Tampered workflow or action | Actions pinned by SHA, least-privilege tokens, protected `main` (signed commits, required checks, no bypass)                                                |
-| Leaked release credentials  | Release PRs use a short-lived GitHub App token limited to three permissions (ADR-0003)                                                                      |
-| Tampered image              | SBOM, cosign keyless signature and SLSA provenance (v0.4), verified on the server before deploying (v1.0)                                                   |
+The pipeline is described in [security-pipeline.md](security-pipeline.md) (ADR-0007).
+
+| Threat                                      | Mitigations                                                                                                                                                                                                                            |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Malicious or vulnerable dependency          | Lockfile, 3-day release age, no install scripts unless approved, overrides for vulnerable transitive versions, Dependabot; OSV-Scanner and `pnpm audit` block CVSS ≥ 7 on every pull request                                           |
+| Vulnerable code merged                      | CodeQL and Semgrep on every pull request, blocking high-severity findings; OWASP ZAP against the running API, blocking High alerts                                                                                                     |
+| Secret committed                            | Gitleaks before each commit (hook) and on every pull request; GitHub secret scanning with push protection                                                                                                                              |
+| Tampered workflow, action or scanner        | Actions pinned by SHA (enforced by the repository), scanner images pinned by digest, 3-day Dependabot cooldown, CodeQL on the workflows, harden-runner egress audit; no `pull_request_target`, checkouts without persisted credentials |
+| Overprivileged pipeline token               | Empty workflow permissions, granted per job; package, OIDC and attestation writes in the release `publish` job only                                                                                                                    |
+| Leaked release credentials                  | Release PRs use a short-lived GitHub App token limited to three permissions (ADR-0003); images are signed keyless, so there is no signing key to leak                                                                                  |
+| Published image differs from the tested one | One build per run; checks and scanners read its OCI archive, which a release pushes with preserved digests, then compares the served digest                                                                                            |
+| Tampered or substituted image               | cosign keyless signature bound to the workflow and release tag, SLSA provenance and SBOM attestations (v0.4), verified before deploying (v1.0)                                                                                         |
+| Vulnerable base image or OS package         | Distroless base without shell or package manager, pinned by digest and updated by Dependabot; Trivy blocks fixable HIGH and CRITICAL vulnerabilities in both images                                                                    |
+| Change merged without a second reviewer     | Required checks, signed commits and no bypass, but no second person: RR-9                                                                                                                                                              |
 
 ## Personal data and retention
 
@@ -132,6 +140,7 @@ Other personal data: the email and name of each account. Device cookies, session
 | RR-6 | Access tokens outlive logout by up to 15 minutes    | Accepted (ADR-0004)                    | —       |
 | RR-7 | The global per-IP limit is per instance             | Accepted                               | v1.0    |
 | RR-8 | Local Grafana admits anonymous admins               | Accepted (development only)            | —       |
+| RR-9 | No second person reviews changes                    | Accepted (single maintainer)           | —       |
 
 ### RR-1. Account enumeration through member addition — resolved
 
@@ -164,3 +173,7 @@ The coarse limit of 600 requests per minute lives in each instance's memory, so 
 ### RR-8. Anonymous admins in the local Grafana
 
 The `grafana/otel-lgtm` image lets anonymous visitors in as admins, which suits a disposable development stack. The observability profile publishes Grafana and OTLP/HTTP on `127.0.0.1` only, keeps no volume, and is never deployed; production telemetry goes to `observability-stack`, with its own authentication.
+
+### RR-9. Single maintainer, no second reviewer
+
+The repository has one maintainer, so no pull request is approved by someone other than its author, and OpenSSF Scorecard scores Code-Review and Branch-Protection accordingly. A required approval would only block every merge. What a reviewer would catch is covered, partly, by the required checks (tests, SAST, secrets, dependencies, configuration, image and DAST scans), signed commits and a `main` without bypass; what only a human would notice is not. A second maintainer, or a reviewer from the ecosystem projects, would require one approval.

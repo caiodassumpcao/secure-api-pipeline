@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  Active scan policy of the zap job on pull requests (dast.yml, ADR-0007):
+  the rules that apply to a JSON API on Node.js and PostgreSQL. Rules for
+  XML, SOAP, PHP, Java and C runtimes stay in the full scan, which runs every
+  rule nightly and on releases. Every rule enabled here must complete, or
+  the job fails (scripts/zap-coverage.ts).
+-->
+<configuration>
+<policy>dast-pr</policy>
+<scanner>
+<level>OFF</level>
+<strength>MEDIUM</strength>
+</scanner>
+<plugins>
+<!-- Directory Browsing -->
+<p0>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p0>
+<!-- Path Traversal -->
+<p6>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p6>
+<!-- External Redirect -->
+<p20019>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p20019>
+<!-- CRLF Injection -->
+<p40003>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p40003>
+<!-- Parameter Tampering -->
+<p40008>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p40008>
+<!-- SQL Injection -->
+<p40018>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p40018>
+<!-- SQL Injection - PostgreSQL (Time Based) -->
+<p40022>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p40022>
+<!-- .env Information Leak -->
+<p40034>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p40034>
+<!-- Remote OS Command Injection -->
+<p90020>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p90020>
+<!-- Cloud Metadata Potentially Exposed -->
+<p90034>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p90034>
+<!-- Server Side Template Injection -->
+<p90035>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p90035>
+<!-- Server Side Template Injection (Blind) -->
+<p90036>
+<enabled>true</enabled>
+<level>MEDIUM</level>
+</p90036>
+</plugins>
+</configuration>

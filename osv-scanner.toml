@@ -1,0 +1,7 @@
+# OSV-Scanner exceptions (ADR-0007). An entry needs a reason, an
+# ignoreUntil date and a row in docs/security-pipeline.md ("Exceptions"):
+#
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = 2027-01-31
+# reason = "Why it does not apply, or why the risk is accepted until then."

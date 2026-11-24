@@ -6,16 +6,14 @@
 
 <p align="center">
   <a href="https://github.com/caiodassumpcao/secure-api-pipeline/actions/workflows/ci.yml"><img src="https://github.com/caiodassumpcao/secure-api-pipeline/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
-  <!-- v0.4: security workflow and OpenSSF Scorecard badges
   <a href="https://github.com/caiodassumpcao/secure-api-pipeline/actions/workflows/security.yml"><img src="https://github.com/caiodassumpcao/secure-api-pipeline/actions/workflows/security.yml/badge.svg" alt="Security"/></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/caiodassumpcao/secure-api-pipeline"><img src="https://api.scorecard.dev/projects/github.com/caiodassumpcao/secure-api-pipeline/badge" alt="OpenSSF Scorecard"/></a>
-  -->
   <img src="https://img.shields.io/badge/node-24%20LTS-339933?logo=nodedotjs&logoColor=white" alt="Node 24"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"/></a>
 </p>
 
 > [!NOTE]
-> **Built in public, phase by phase.** v0.3 makes the API observable: OpenTelemetry traces from each request down to its SQL queries, RED and security metrics, and logs correlated by trace id, with a local Grafana. It builds on v0.2 (Ed25519 access tokens with rotating refresh tokens, brute-force protection, an append-only audit log, member invitations) and v0.1 (tenant-isolated workspaces, projects and tasks, migrations and OpenAPI docs). Highlights and Architecture describe the v1.0 target; sections marked with a version describe what that release delivers — see the [roadmap](#roadmap).
+> **Built in public, phase by phase.** v0.4 adds the DevSecOps pipeline: every pull request is scanned (CodeQL, Semgrep, Gitleaks, OSV-Scanner, Trivy) and attacked by an authenticated OWASP ZAP scan, and each release publishes a distroless, multi-arch image that was tested and scanned, signed with cosign keyless, with SLSA provenance and SBOMs. It builds on v0.3 (OpenTelemetry traces, metrics and correlated logs), v0.2 (Ed25519 access tokens with rotating refresh tokens, brute-force protection, an append-only audit log, member invitations) and v0.1 (tenant-isolated workspaces, projects and tasks, migrations and OpenAPI docs). Highlights and Architecture describe the v1.0 target; sections marked with a version describe what that release delivers — see the [roadmap](#roadmap).
 
 ---
 
@@ -60,7 +58,7 @@ flowchart LR
     DEP -->|fail| RB[Automatic rollback]
 ```
 
-Details of every gate and what it catches: `docs/security-pipeline.md` _(v0.4)_.
+Details of every gate, what it catches and which checks are required: [`docs/security-pipeline.md`](docs/security-pipeline.md). Deployment (approval, server-side verification, rollback) arrives in v1.0.
 
 ## Architecture
 
@@ -103,7 +101,7 @@ mkdir -p keys && openssl genpkey -algorithm ed25519 -out keys/jwt-private.pem
 openssl pkey -in keys/jwt-private.pem -pubout -out keys/jwt-public.pem
 ```
 
-The container runs as uid 1000: on Linux, if your uid differs, make these development keys readable by it (`chmod 644 keys/jwt-private.pem`).
+The container runs as uid 65532 (distroless `nonroot`): on Linux, make the development private key readable by it (`chmod 644 keys/jwt-private.pem`); `pnpm keys:generate` writes it for your user only.
 
 With local observability (Grafana, Tempo, Loki, Prometheus and a provisioned dashboard):
 
@@ -170,17 +168,22 @@ Callers outside a workspace get 404 for everything in it, as if it did not exist
 
 ## Verify a release image
 
-_Available from v0.4._
+Release images are published to GHCR from v0.4 (`linux/amd64`, `linux/arm64`), signed and attested by the release workflow:
 
 ```bash
-IMAGE=ghcr.io/caiodassumpcao/secure-api-pipeline:1.0.0
+VERSION=0.4.0
+IMAGE=ghcr.io/caiodassumpcao/secure-api-pipeline
+REPO=caiodassumpcao/secure-api-pipeline
 
-cosign verify "$IMAGE" \
-  --certificate-identity-regexp '^https://github.com/caiodassumpcao/secure-api-pipeline/' \
+cosign verify "$IMAGE:$VERSION" \
+  --certificate-identity "https://github.com/$REPO/.github/workflows/container.yml@refs/tags/v$VERSION" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
-gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
+gh attestation verify "oci://$IMAGE:$VERSION" --repo "$REPO" \
+  --signer-workflow "$REPO/.github/workflows/container.yml"
 ```
+
+SBOMs (SPDX and CycloneDX) and the attestation bundles are attached to each [release](https://github.com/caiodassumpcao/secure-api-pipeline/releases); [`docs/security-pipeline.md`](docs/security-pipeline.md#verifying-an-image) explains each check.
 
 ## Security
 
@@ -189,7 +192,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 - Threat model: [`docs/threat-model.md`](docs/threat-model.md) — data flows, STRIDE per component, personal data and retention, residual risks
 - Authentication: [ADR-0004](docs/adr/0004-token-strategy.md) tokens · [ADR-0009](docs/adr/0009-brute-force-protection.md) brute force · [ADR-0010](docs/adr/0010-member-invitations.md) invitations
 - Telemetry without secrets: [ADR-0006](docs/adr/0006-opentelemetry-telemetry.md)
-- Security pipeline: `docs/security-pipeline.md` _(v0.4)_
+- Security pipeline and supply chain: [`docs/security-pipeline.md`](docs/security-pipeline.md) · [ADR-0007](docs/adr/0007-supply-chain-security.md)
 
 ## Part of a platform
 
@@ -206,7 +209,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 - [x] **v0.1** — Domain, data model, CRUD, tenant isolation, OpenAPI
 - [x] **v0.2** — Authentication, brute-force protection, audit log, invitations, threat model
 - [x] **v0.3** — OpenTelemetry traces, metrics and correlated logs, local Grafana
-- [ ] **v0.4** — DevSecOps pipeline: scanners, SBOM, signing, provenance, DAST
+- [x] **v0.4** — DevSecOps pipeline: scanners, DAST, distroless image, SBOM, signing, provenance
 - [ ] **v1.0** — Verified deploys with automatic rollback
 
 ## Documentation
@@ -216,6 +219,7 @@ gh attestation verify "oci://$IMAGE" --owner caiodassumpcao
 - [Problem types](docs/problems.md)
 - [Threat model](docs/threat-model.md)
 - [Observability guide](docs/observability.md)
+- [Security pipeline](docs/security-pipeline.md)
 - [Contributing](CONTRIBUTING.md)
 - Runbook — `docs/runbook.md` _(v1.0)_
 

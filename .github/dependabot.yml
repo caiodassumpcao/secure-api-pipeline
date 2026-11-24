@@ -77,3 +77,15 @@ updates:
       # PostgreSQL major upgrades need a data migration.
       - dependency-name: postgres
         update-types: [version-update:semver-major]
+
+  # Scanner images run by the security workflows (ADR-0007).
+  - package-ecosystem: docker-compose
+    directory: /.github/scanners
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: ci
+      include: scope

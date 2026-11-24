@@ -1,0 +1,64 @@
+# Scanner images run by the security workflows (ADR-0007), pinned by tag and
+# digest. Dependabot's docker-compose ecosystem keeps them current; images
+# referenced from workflow steps would be invisible to it. Workflows run them
+# from the repository root:
+#
+#   docker compose -f .github/scanners/compose.yaml --project-directory . run --rm <tool> ...
+#
+# The repository is mounted at /src. Reports are written under /src/reports,
+# which the workflows upload; nothing else is written to the checkout.
+name: scanners
+
+x-scanner: &scanner
+  working_dir: /src
+  volumes:
+    - .:/src
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  # SAST: OWASP Top 10, Node.js and TypeScript rule packs.
+  semgrep:
+    <<: *scanner
+    image: semgrep/semgrep:1.186.0@sha256:6e1b04340e60e910fbb4ddbf3c857ab0918f064417ad5ac530014ccb3cf8c8f1
+    environment:
+      SEMGREP_SEND_METRICS: 'off'
+      SEMGREP_ENABLE_VERSION_CHECK: '0'
+
+  # Secrets in the git history.
+  gitleaks:
+    <<: *scanner
+    image: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+
+  # Known vulnerabilities in the lockfile.
+  osv-scanner:
+    <<: *scanner
+    image: ghcr.io/google/osv-scanner:v2.7.1@sha256:a70ffffc2bfd33482953e5d6b64c6fcdb30239717a07b0f0d3ab2859ce3e4cde
+
+  # Misconfigurations in the repository; packages in the images. The
+  # vulnerability database is cached between steps of a job.
+  trivy:
+    <<: *scanner
+    image: ghcr.io/aquasecurity/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+    environment:
+      TRIVY_CACHE_DIR: /cache
+      TRIVY_DISABLE_VEX_NOTICE: 'true'
+    volumes:
+      - .:/src
+      - ${TRIVY_CACHE:-./reports/.trivy-cache}:/cache
+
+  # SBOMs of the images (SPDX and CycloneDX).
+  syft:
+    <<: *scanner
+    image: ghcr.io/anchore/syft:v1.57.2@sha256:e97e20b6e6d1699c60296b66ab337941724f9bd06ac279d893eda89601fc4b2a
+    environment:
+      SYFT_CHECK_FOR_APP_UPDATE: 'false'
+
+  # DAST: the API scan reaches the stack published on the host's 127.0.0.1.
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af
+    network_mode: host
+    volumes:
+      - ./reports/zap:/zap/wrk:rw
+    security_opt:
+      - no-new-privileges:true

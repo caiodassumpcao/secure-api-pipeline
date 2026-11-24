@@ -1,0 +1,243 @@
+name: dast
+
+# OWASP ZAP API scan of the running stack (ADR-0007), authenticated as a
+# workspace member seeded with synthetic data. Two modes share this job:
+#
+# - zap (pull requests and main; a required check): the rules that apply to a
+#   JSON API on Node.js and PostgreSQL (.zap/pr.policy), time-boxed;
+# - zap-full (nightly, releases, on demand; not required): every installed
+#   rule, with no budget short of the job's timeout.
+#
+# Alerts go to code scanning; High alerts block. A scan that did not run every
+# rule of its policy to the end fails, whatever it found.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 3 * * *'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SCAN: docker compose -f .github/scanners/compose.yaml --project-directory . run --rm
+  FULL: ${{ contains(fromJSON('["schedule", "release", "workflow_dispatch"]'), github.event_name) }}
+
+jobs:
+  # Required check as zap: runs on every pull request and always reports. The
+  # scan is skipped when nothing the API serves changed; main always scans.
+  zap:
+    name: ${{ contains(fromJSON('["schedule", "release", "workflow_dispatch"]'), github.event_name) && 'zap-full' || 'zap' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ contains(fromJSON('["schedule", "release", "workflow_dispatch"]'), github.event_name) && 200 || 30 }}
+    permissions:
+      contents: read
+      # dorny/paths-filter lists the files of the pull request through the API.
+      pull-requests: read
+      security-events: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Detect API changes
+        id: changes
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            api:
+              - 'src/**'
+              - 'drizzle/**'
+              - 'Dockerfile'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'compose.yaml'
+              - 'scripts/seed.ts'
+              - 'scripts/dast-openapi.ts'
+              - 'scripts/zap-report.ts'
+              - 'scripts/zap-coverage.ts'
+              - '.zap/**'
+              - '.github/scanners/**'
+              - '.github/workflows/dast.yml'
+
+      # pr: the pull request policy within 12 minutes. full: every rule within
+      # 180 minutes. A scan cut by either budget fails the coverage gate.
+      - name: Decide
+        id: run
+        env:
+          EVENT: ${{ github.event_name }}
+          CHANGED: ${{ steps.changes.outputs.api }}
+        run: |
+          if [ "$FULL" = true ]; then
+            { echo "scan=true"; echo "mode=full"; echo "policy=all"; echo "budget=180"; } >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" != pull_request ] || [ "$CHANGED" = true ]; then
+            { echo "scan=true"; echo "mode=pr"; echo "policy=/zap/wrk/pr.policy"; echo "budget=12"; } >> "$GITHUB_OUTPUT"
+          else
+            echo "scan=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing the API serves changed: DAST scan skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up Node.js
+        if: ${{ steps.run.outputs.scan == 'true' }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      # Development values; throwaway keys; the stack is discarded at the end.
+      # Rate limits are raised a thousandfold so the scanner reaches the
+      # handlers instead of a 429 (refused in production); the integration
+      # tests prove the limits themselves.
+      - name: Start the stack
+        if: ${{ steps.run.outputs.scan == 'true' }}
+        run: |
+          cp .env.example .env
+          echo 'RATE_LIMIT_MULTIPLIER=1000' >> .env
+          node scripts/generate-keys.ts
+          chmod 644 keys/jwt-private.pem
+          docker compose up --detach --build --wait --wait-timeout 180
+
+      # The scanner's copy of the OpenAPI document carries the seeded ids and
+      # values the API accepts, so attacks get past validation
+      # (scripts/dast-openapi.ts).
+      - name: Seed
+        if: ${{ steps.run.outputs.scan == 'true' }}
+        run: |
+          mkdir -p reports/zap
+          node scripts/seed.ts --credentials-file "$RUNNER_TEMP/dast-credentials.json" \
+            > "$RUNNER_TEMP/ids.json"
+          echo "Seeded: \`$(cat "$RUNNER_TEMP/ids.json")\`" >> "$GITHUB_STEP_SUMMARY"
+          curl --fail --silent --show-error http://127.0.0.1:3000/openapi.json \
+            --output "$RUNNER_TEMP/openapi.json"
+          node scripts/dast-openapi.ts "$RUNNER_TEMP/openapi.json" "$RUNNER_TEMP/ids.json" \
+            reports/zap/openapi.json
+
+      # The member's credentials reach ZAP through the environment only; the
+      # hook logs in, sends the token to the API's host only and logs in again
+      # before it expires. One thread, no delay: the raised limits leave room.
+      # Exit codes 1 and 2 only report alerts: the gates below decide.
+      - name: Scan
+        if: ${{ steps.run.outputs.scan == 'true' }}
+        env:
+          DAST_POLICY: ${{ steps.run.outputs.policy }}
+          BUDGET: ${{ steps.run.outputs.budget }}
+        run: |
+          credentials="$RUNNER_TEMP/dast-credentials.json"
+          DAST_EMAIL="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).email)' "$credentials")"
+          DAST_PASSWORD="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).password)' "$credentials")"
+          echo "::add-mask::$DAST_PASSWORD"
+          export DAST_API=http://127.0.0.1:3000 DAST_EMAIL DAST_PASSWORD DAST_POLICY
+          options="-config scanner.threadPerHost=1 -config scanner.delayInMs=0"
+          options="$options -config scanner.maxScanDurationInMins=$BUDGET -config scanner.maxRuleDurationInMins=0"
+          cp .zap/hooks.py .zap/pr.policy reports/zap/
+          # ZAP runs as uid 1000 inside its image and writes its reports here.
+          chmod 777 reports/zap
+          status=0
+          $SCAN -e DAST_API -e DAST_EMAIL -e DAST_PASSWORD -e DAST_POLICY zap \
+            zap-api-scan.py -t /zap/wrk/openapi.json -f openapi -O http://127.0.0.1:3000 \
+            -J zap-report.json -r zap-report.html -I -T 15 \
+            --hook /zap/wrk/hooks.py -z "$options" || status=$?
+          if [ "$status" -gt 2 ]; then exit "$status"; fi
+
+      - name: Active scan coverage
+        if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
+        run: |
+          if [ -f reports/zap/active-scan.md ]; then
+            cat reports/zap/active-scan.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::warning::ZAP did not record the active scan coverage: see the Scan step log.'
+          fi
+
+      # The API's own count of what it answered during the job, as a check on
+      # ZAP's.
+      - name: API responses by status
+        if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
+        run: |
+          docker compose logs api --no-log-prefix --no-color | node -e '
+            const counts = {};
+            for (const line of require("node:fs").readFileSync(0, "utf8").split("\n")) {
+              let entry;
+              try { entry = JSON.parse(line); } catch { continue; }
+              if (entry.msg !== "request completed") continue;
+              const code = entry.res?.statusCode ?? "none";
+              counts[code] = (counts[code] ?? 0) + 1;
+            }
+            const list = Object.entries(counts).map(([code, n]) => `${code}: ${n}`).join(", ");
+            process.stdout.write(`\nAPI responses by status (whole job): ${list}.\n`);
+          ' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Convert to SARIF
+        id: report
+        if: ${{ !cancelled() && hashFiles('reports/zap/zap-report.json') != '' }}
+        run: |
+          status=0
+          node scripts/zap-report.ts reports/zap/zap-report.json reports/zap.sarif \
+            --ignore .zap/rules.tsv || status=$?
+          echo "high=$([ "$status" = 0 ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to code scanning
+        if: ${{ !cancelled() && hashFiles('reports/zap.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: reports/zap.sarif
+          category: ${{ steps.run.outputs.mode == 'full' && 'zap-full' || 'zap' }}
+
+      # Reports describe requests, never their headers; tokens are masked
+      # anyway before they are kept.
+      - name: Keep the report
+        if: ${{ !cancelled() && hashFiles('reports/zap/zap-report.json') != '' }}
+        run: |
+          sed -i -E \
+            -e 's/(bearer )[A-Za-z0-9._~+\/=-]+/\1[REDACTED]/Ig' \
+            -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/[REDACTED]/g' \
+            reports/zap/zap-report.json reports/zap/zap-report.html
+
+      - name: Upload the report
+        if: ${{ !cancelled() && hashFiles('reports/zap/zap-report.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: zap-report-${{ steps.run.outputs.mode }}-${{ github.run_attempt }}
+          path: |
+            reports/zap/zap-report.json
+            reports/zap/zap-report.html
+            reports/zap/active-scan.json
+          retention-days: 7
+
+      - name: Show API logs
+        if: ${{ failure() && steps.run.outputs.scan == 'true' }}
+        run: docker compose logs migrate api
+
+      - name: Stop stack
+        if: ${{ always() && steps.run.outputs.scan == 'true' }}
+        run: docker compose down --volumes
+
+      - name: Fail on High alerts
+        if: ${{ !cancelled() && steps.report.outputs.high == 'true' }}
+        run: |
+          echo '::error::ZAP raised High alerts: see the Security tab and the zap-report artifact.'
+          exit 1
+
+      - name: Fail on an incomplete scan
+        if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
+        env:
+          MODE: ${{ steps.run.outputs.mode }}
+        run: |
+          policy=()
+          if [ "$MODE" = pr ]; then policy=(--policy .zap/pr.policy); fi
+          node scripts/zap-coverage.ts reports/zap/active-scan.json "${policy[@]}" \
+            || { echo '::error::The active scan did not run every rule of its policy to the end.'; exit 1; }

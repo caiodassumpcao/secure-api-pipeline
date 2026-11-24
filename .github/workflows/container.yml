@@ -1,0 +1,506 @@
+name: container
+
+# The release image (ADR-0007). One multi-arch build into an OCI archive;
+# every check reads that archive, and a release pushes it as is, so the
+# published digests are those of the tested and scanned images. Pull requests
+# and main build and check only; a GitHub Release (published by release-please
+# with its App token) also publishes, signs, attests and verifies.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/caiodassumpcao/secure-api-pipeline
+  LOCAL_IMAGE: secure-api-pipeline:local
+  SCAN: docker compose -f .github/scanners/compose.yaml --project-directory . run --rm
+
+jobs:
+  # Required check: runs on every pull request and always reports. The build
+  # and its checks are skipped when no source, dependency, image or Compose
+  # file changed; pushes to main and releases always run them.
+  build-scan:
+    name: build-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # dorny/paths-filter lists the files of the pull request through the API.
+      pull-requests: read
+      security-events: write
+    outputs:
+      build: ${{ steps.run.outputs.build }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Detect image changes
+        id: changes
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            image:
+              - 'src/**'
+              - 'drizzle/**'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig*.json'
+              - 'compose.yaml'
+              - 'scripts/image-check.ts'
+              - 'scripts/generate-keys.ts'
+              - '.trivyignore.yaml'
+              - '.github/scanners/**'
+              - '.github/workflows/container.yml'
+
+      - name: Decide
+        id: run
+        env:
+          EVENT: ${{ github.event_name }}
+          CHANGED: ${{ steps.changes.outputs.image }}
+        run: |
+          if [ "$EVENT" != pull_request ] || [ "$CHANGED" = true ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "No source, dependency or image change: build and scans skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up Node.js
+        if: ${{ steps.run.outputs.build == 'true' }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Metadata
+        id: meta
+        if: ${{ steps.run.outputs.build == 'true' }}
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -n "$TAG" ]; then version="${TAG#v}"; else version="0.0.0-dev.${GITHUB_SHA::12}"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "created=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        if: ${{ steps.run.outputs.build == 'true' }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Pull requests read the cache that main writes; a release builds from
+      # scratch. BuildKit's own provenance and SBOM stay off: the release
+      # attests with GitHub attestations instead.
+      - name: Build linux/amd64 and linux/arm64
+        if: ${{ steps.run.outputs.build == 'true' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          outputs: type=oci,dest=reports/image/image.tar
+          provenance: false
+          sbom: false
+          no-cache: ${{ github.event_name == 'release' }}
+          cache-from: ${{ github.event_name != 'release' && 'type=gha,scope=image' || '' }}
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=image' || '' }}
+          labels: |
+            org.opencontainers.image.title=secure-api-pipeline
+            org.opencontainers.image.description=Multi-tenant project and task API
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+            org.opencontainers.image.licenses=MIT
+          annotations: |
+            index:org.opencontainers.image.description=Multi-tenant project and task API
+            index:org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            index:org.opencontainers.image.revision=${{ github.sha }}
+            index:org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            index:org.opencontainers.image.licenses=MIT
+
+      # One OCI layout directory per platform for the scanners (Trivy reads
+      # layout directories and docker archives, not OCI archives), the amd64
+      # image in the local daemon, and the arm64 image as a docker archive
+      # for the native arm64 runner (which has no skopeo).
+      - name: Split the archive
+        if: ${{ steps.run.outputs.build == 'true' }}
+        shell: bash
+        run: |
+          cd reports/image
+          for arch in amd64 arm64; do
+            skopeo copy --quiet --override-arch "$arch" --preserve-digests \
+              oci-archive:image.tar "oci:image-$arch"
+          done
+          skopeo copy --quiet "oci:image-amd64" "docker-daemon:$LOCAL_IMAGE"
+          skopeo copy --quiet "oci:image-arm64" "docker-archive:image-arm64.docker.tar:$LOCAL_IMAGE"
+          skopeo inspect --raw oci-archive:image.tar | sha256sum | awk '{print "index digest: sha256:" $1}' >> "$GITHUB_STEP_SUMMARY"
+
+      # Throwaway development stack around the image itself.
+      - name: Start a stack on the amd64 image
+        if: ${{ steps.run.outputs.build == 'true' }}
+        run: |
+          cp .env.example .env
+          node scripts/generate-keys.ts
+          chmod 644 keys/jwt-private.pem
+          docker compose up --detach --wait --wait-timeout 120 --no-build
+
+      - name: Check the amd64 image
+        if: ${{ steps.run.outputs.build == 'true' }}
+        run: node scripts/image-check.ts "$LOCAL_IMAGE" --arch amd64 --api http://127.0.0.1:3000
+
+      - name: Show API logs
+        if: ${{ failure() && steps.run.outputs.build == 'true' }}
+        run: docker compose logs migrate api
+
+      - name: Stop stack
+        if: ${{ always() && steps.run.outputs.build == 'true' }}
+        run: docker compose down --volumes
+
+      # Every severity goes to code scanning; fixable HIGH and CRITICAL block.
+      - name: Trivy
+        if: ${{ steps.run.outputs.build == 'true' }}
+        run: |
+          for arch in amd64 arm64; do
+            $SCAN trivy image --input "reports/image/image-$arch" --scanners vuln \
+              --ignorefile .trivyignore.yaml --format sarif --output "reports/trivy-image-$arch.sarif"
+          done
+
+      - name: Upload amd64 findings
+        if: ${{ !cancelled() && hashFiles('reports/trivy-image-amd64.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: reports/trivy-image-amd64.sarif
+          category: trivy-image-amd64
+
+      - name: Upload arm64 findings
+        if: ${{ !cancelled() && hashFiles('reports/trivy-image-arm64.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: reports/trivy-image-arm64.sarif
+          category: trivy-image-arm64
+
+      - name: SBOMs
+        if: ${{ steps.run.outputs.build == 'true' }}
+        run: |
+          for arch in amd64 arm64; do
+            $SCAN syft scan "oci-dir:reports/image/image-$arch" \
+              --output "spdx-json=reports/image/sbom-$arch.spdx.json" \
+              --output "cyclonedx-json=reports/image/sbom-$arch.cdx.json"
+          done
+
+      - name: Keep the image and SBOMs for the next jobs
+        if: ${{ steps.run.outputs.build == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image
+          path: |
+            reports/image/image.tar
+            reports/image/image-arm64.docker.tar
+            reports/image/sbom-*.json
+          retention-days: 3
+          overwrite: true
+
+      - name: Fail on fixable HIGH or CRITICAL
+        if: ${{ steps.run.outputs.build == 'true' }}
+        run: |
+          status=0
+          for arch in amd64 arm64; do
+            $SCAN trivy image --input "reports/image/image-$arch" --scanners vuln \
+              --ignorefile .trivyignore.yaml --skip-db-update \
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 || status=1
+          done
+          exit "$status"
+
+  # The arm64 image, run natively: same configuration checks, argon2 for
+  # arm64 glibc, and a real login.
+  image-arm64:
+    name: image-arm64
+    needs: build-scan
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Skipped
+        if: ${{ needs.build-scan.outputs.build != 'true' }}
+        run: |
+          echo "No image was built: nothing to check." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check out
+        if: ${{ needs.build-scan.outputs.build == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: ${{ needs.build-scan.outputs.build == 'true' }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Download the image
+        if: ${{ needs.build-scan.outputs.build == 'true' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+          path: reports/image
+
+      - name: Start a stack on the arm64 image
+        if: ${{ needs.build-scan.outputs.build == 'true' }}
+        run: |
+          docker load --input reports/image/image-arm64.docker.tar
+          cp .env.example .env
+          node scripts/generate-keys.ts
+          chmod 644 keys/jwt-private.pem
+          docker compose up --detach --wait --wait-timeout 120 --no-build
+
+      - name: Check the arm64 image
+        if: ${{ needs.build-scan.outputs.build == 'true' }}
+        run: node scripts/image-check.ts "$LOCAL_IMAGE" --arch arm64 --api http://127.0.0.1:3000
+
+      - name: Show API logs
+        if: ${{ failure() && needs.build-scan.outputs.build == 'true' }}
+        run: docker compose logs migrate api
+
+      - name: Stop stack
+        if: ${{ always() && needs.build-scan.outputs.build == 'true' }}
+        run: docker compose down --volumes
+
+  # Release only, and the only job allowed to write packages, request an OIDC
+  # token or create attestations.
+  publish:
+    name: publish
+    if: ${{ github.event_name == 'release' }}
+    needs: [build-scan, image-arm64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      version: ${{ steps.push.outputs.version }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Download the image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+          path: reports/image
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The archive goes up unchanged (--preserve-digests): the registry must
+      # then serve the very index that was tested and scanned.
+      - name: Push the checked archive
+        id: push
+        shell: bash
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${TAG#v}"
+          auth="$HOME/.docker/config.json"
+          digest="sha256:$(skopeo inspect --raw oci-archive:reports/image/image.tar | sha256sum | cut -d' ' -f1)"
+          skopeo copy --all --preserve-digests --authfile "$auth" \
+            oci-archive:reports/image/image.tar "docker://$IMAGE:$version"
+          for tag in "${version%.*}" latest; do
+            skopeo copy --all --preserve-digests --authfile "$auth" \
+              "docker://$IMAGE@$digest" "docker://$IMAGE:$tag"
+          done
+          pushed="sha256:$(skopeo inspect --raw --authfile "$auth" "docker://$IMAGE:$version" | sha256sum | cut -d' ' -f1)"
+          if [ "$pushed" != "$digest" ]; then
+            echo "::error::GHCR serves $pushed for $version, not the checked index $digest."
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Published \`$IMAGE:$version\` (also \`${version%.*}\`, \`latest\`) at \`$digest\`." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: v3.1.4
+
+      # Keyless: a short-lived Sigstore certificate for this workflow's OIDC
+      # identity, logged in Rekor. No key to store.
+      - name: Sign
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+
+      - name: Attest build provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest the amd64 SBOM
+        id: sbom-amd64
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: reports/image/sbom-amd64.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest the arm64 SBOM
+        id: sbom-arm64
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: reports/image/sbom-arm64.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Collect release assets
+        env:
+          VERSION: ${{ steps.push.outputs.version }}
+          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM_AMD64: ${{ steps.sbom-amd64.outputs.bundle-path }}
+          SBOM_ARM64: ${{ steps.sbom-arm64.outputs.bundle-path }}
+        run: |
+          mkdir -p assets
+          name="secure-api-pipeline-$VERSION"
+          cp "$PROVENANCE" "assets/$name.provenance.sigstore.json"
+          cp "$SBOM_AMD64" "assets/$name-amd64.sbom.sigstore.json"
+          cp "$SBOM_ARM64" "assets/$name-arm64.sbom.sigstore.json"
+          for arch in amd64 arm64; do
+            cp "reports/image/sbom-$arch.spdx.json" "assets/$name-$arch.spdx.json"
+            cp "reports/image/sbom-$arch.cdx.json" "assets/$name-$arch.cdx.json"
+          done
+
+      - name: Keep the release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: assets/
+          retention-days: 3
+          overwrite: true
+
+  # The SBOMs and attestation bundles on the GitHub Release.
+  release-assets:
+    name: release-assets
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Download the release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: assets
+
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" assets/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  # What a deployment will check: the signature and both attestations.
+  verify-image:
+    name: verify-image
+    needs: [publish, release-assets]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: v3.1.4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `shell: bash` adds pipefail: a failed verification cannot hide behind tee.
+      - name: Verify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          workflow="$GITHUB_REPOSITORY/.github/workflows/container.yml"
+          identity="https://github.com/$workflow@refs/tags/$TAG"
+          issuer=https://token.actions.githubusercontent.com
+          {
+            echo '### Verification'
+            echo '```console'
+            echo "\$ cosign verify $IMAGE:$VERSION --certificate-identity $identity --certificate-oidc-issuer $issuer"
+          } >> "$GITHUB_STEP_SUMMARY"
+          verified="$(cosign verify "$IMAGE:$VERSION" --certificate-identity "$identity" \
+            --certificate-oidc-issuer "$issuer" | jq -r '.[0].critical.image."docker-manifest-digest"')"
+          echo "signature verified for $verified" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$verified" != "$DIGEST" ]; then
+            echo "::error::The signed digest $verified is not the published $DIGEST."
+            exit 1
+          fi
+          for predicate in https://slsa.dev/provenance/v1 https://spdx.dev/Document/v2.3; do
+            echo "\$ gh attestation verify oci://$IMAGE:$VERSION --repo $GITHUB_REPOSITORY --signer-workflow $workflow --predicate-type $predicate" >> "$GITHUB_STEP_SUMMARY"
+            gh attestation verify "oci://$IMAGE:$VERSION" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$workflow" --predicate-type "$predicate" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Release assets' >> "$GITHUB_STEP_SUMMARY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' \
+            | tee -a "$GITHUB_STEP_SUMMARY" | grep -q '\.spdx\.json$'

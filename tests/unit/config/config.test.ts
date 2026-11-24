@@ -34,6 +34,7 @@ describe('loadConfig', () => {
       },
       cors: { origins: [] },
       trustProxy: false,
+      rateLimit: { multiplier: 1 },
     });
   });
 
@@ -52,6 +53,7 @@ describe('loadConfig', () => {
         JWT_AUDIENCE: 'example-clients',
         CORS_ORIGINS: 'https://app.example.com, http://localhost:5173',
         TRUST_PROXY: '1',
+        RATE_LIMIT_MULTIPLIER: '100',
       },
       noFiles,
     );
@@ -71,6 +73,7 @@ describe('loadConfig', () => {
       },
       cors: { origins: ['https://app.example.com', 'http://localhost:5173'] },
       trustProxy: 1,
+      rateLimit: { multiplier: 100 },
     });
   });
 
@@ -255,6 +258,35 @@ describe('loadConfig', () => {
       );
 
       expect(error.issues).toEqual(['DATABASE_URL: must be a postgres:// or postgresql:// URL']);
+    });
+  });
+
+  describe('RATE_LIMIT_MULTIPLIER', () => {
+    it.each(['0', '1001', '1.5', 'many'])('refuses %s without echoing it', (value) => {
+      const error = configError(() =>
+        loadConfig({ DATABASE_URL, RATE_LIMIT_MULTIPLIER: value }, noFiles),
+      );
+
+      expect(error.issues).toEqual(['RATE_LIMIT_MULTIPLIER: must be an integer from 1 to 1000']);
+    });
+
+    it('refuses to raise the limits in production', () => {
+      const error = configError(() =>
+        loadConfig({ NODE_ENV: 'production', DATABASE_URL, RATE_LIMIT_MULTIPLIER: '2' }, noFiles),
+      );
+
+      expect(error.issues).toEqual([
+        'RATE_LIMIT_MULTIPLIER: must be 1 in production: it raises rate limits for test environments only',
+      ]);
+    });
+
+    it('accepts 1 in production', () => {
+      const config = loadConfig(
+        { NODE_ENV: 'production', DATABASE_URL, RATE_LIMIT_MULTIPLIER: '1' },
+        noFiles,
+      );
+
+      expect(config.rateLimit.multiplier).toBe(1);
     });
   });
 

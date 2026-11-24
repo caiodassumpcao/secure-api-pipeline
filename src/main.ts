@@ -15,6 +15,12 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 const config = loadConfigOrExit();
 const logger = createLogger(config.log);
+if (config.rateLimit.multiplier > 1) {
+  logger.warn(
+    { multiplier: config.rateLimit.multiplier },
+    'rate limits raised by RATE_LIMIT_MULTIPLIER: for test environments only',
+  );
+}
 const database = createDatabase(config.database, logger, { expectedMigration: latestMigration() });
 
 const keys = await loadSigningKeysOrExit(config, logger);
@@ -30,7 +36,11 @@ const app = await buildApp({
   auth: { tokens, passwords: createPasswordHasher() },
   docs: config.docs,
   metrics: createAppMetrics(),
-  limits: { limiter: createRateLimiter(database.db), global: true },
+  limits: {
+    limiter: createRateLimiter(database.db),
+    global: true,
+    multiplier: config.rateLimit.multiplier,
+  },
   http: { corsOrigins: config.cors.origins, trustProxy: config.trustProxy },
 });
 
