@@ -3,8 +3,12 @@
  * JSON request log (`request completed` lines), for the job summary and for
  * scripts/zap-gate.ts:
  *
- *   docker compose logs api --no-log-prefix --no-color \
- *     | node scripts/api-status.ts reports/zap/api-status.json
+ *   docker compose logs api --no-log-prefix --no-color > api.log
+ *   node scripts/api-status.ts api.log reports/zap/api-status.json
+ *
+ * The log is read from a file, not from a pipe: reading a large log from
+ * standard input crashed Node.js once in CI (a glibc heap error), and the
+ * step passed, which only the gate's empty-count check caught.
  *
  * It checks ZAP's own counts: every request the stack served, the scanner's
  * base requests included, as the API saw it.
@@ -43,12 +47,15 @@ export function summary(counts: StatusCounts): string {
 }
 
 function main(argv: string[]): void {
-  const [output] = argv;
-  if (output === undefined) throw new Error('usage: api-status.ts <api-status.json> < api.log');
-  const counts = countStatuses(readFileSync(0, 'utf8'));
-  // The path comes from the workflow's command line.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  const [input, output] = argv;
+  if (input === undefined || output === undefined) {
+    throw new Error('usage: api-status.ts <api.log> <api-status.json>');
+  }
+  // Paths come from the workflow's command line.
+  /* eslint-disable security/detect-non-literal-fs-filename */
+  const counts = countStatuses(readFileSync(input, 'utf8'));
   writeFileSync(output, `${JSON.stringify(counts)}\n`);
+  /* eslint-enable security/detect-non-literal-fs-filename */
   process.stdout.write(`\n${summary(counts)}\n`);
 }
 

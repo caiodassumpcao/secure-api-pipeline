@@ -166,11 +166,14 @@ jobs:
 
       # The API's own count of what it answered during the job, as a check on
       # ZAP's; the gate below fails on any 5xx in either.
+      # shell: bash adds pipefail, so a failure before tee fails the step.
       - name: API responses by status
         if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
+        shell: bash
         run: |
-          docker compose logs api --no-log-prefix --no-color \
-            | node scripts/api-status.ts reports/zap/api-status.json | tee -a "$GITHUB_STEP_SUMMARY"
+          docker compose logs api --no-log-prefix --no-color > "$RUNNER_TEMP/api.log"
+          node scripts/api-status.ts "$RUNNER_TEMP/api.log" reports/zap/api-status.json \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Convert to SARIF
         id: report
