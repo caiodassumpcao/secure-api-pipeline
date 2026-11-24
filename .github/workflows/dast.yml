@@ -143,6 +143,24 @@ jobs:
             echo '::warning::ZAP did not record the active scan coverage: see the Scan step log.'
           fi
 
+      # The API's own count of what it answered during the job, as a check on
+      # ZAP's.
+      - name: API responses by status
+        if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
+        run: |
+          docker compose logs api --no-log-prefix --no-color | node -e '
+            const counts = {};
+            for (const line of require("node:fs").readFileSync(0, "utf8").split("\n")) {
+              let entry;
+              try { entry = JSON.parse(line); } catch { continue; }
+              if (entry.msg !== "request completed") continue;
+              const code = entry.res?.statusCode ?? "none";
+              counts[code] = (counts[code] ?? 0) + 1;
+            }
+            const list = Object.entries(counts).map(([code, n]) => `${code}: ${n}`).join(", ");
+            process.stdout.write(`\nAPI responses by status (whole job): ${list}.\n`);
+          ' | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Convert to SARIF
         id: report
         if: ${{ !cancelled() && hashFiles('reports/zap/zap-report.json') != '' }}
