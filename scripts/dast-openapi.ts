@@ -17,7 +17,6 @@
  * The API serves its document unchanged; only the scanner's copy is edited.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { encodeCursor } from '../src/lib/pagination.ts';
 import type { SeedIds } from './seed.ts';
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -26,6 +25,13 @@ type JsonObject = Record<string, Json>;
 /** An account the scan may register, log in to and fail to log in to. */
 export const TARGET_EMAIL = 'dast-target@example.test';
 export const TARGET_PASSWORD = 'synthetic passphrase for the dast target';
+
+/**
+ * A page cursor as the API encodes it (src/lib/pagination.ts). Not imported:
+ * the DAST job runs this script without installing the API's dependencies.
+ */
+const cursorAfter = (key: string): string =>
+  Buffer.from(JSON.stringify({ k: key })).toString('base64url');
 
 /** A well-formed invitation token (43 base64url characters) that matches none. */
 const UNKNOWN_INVITATION_TOKEN = 'dast-unknown-invitation-token-0000000000000';
@@ -39,7 +45,7 @@ export function examplesFor(ids: SeedIds): Map<string, string> {
     ['userId', ids.userId],
     ['invitationId', ids.invitationId],
     ['assigneeId', ids.userId],
-    ['cursor', encodeCursor(ids.taskId)],
+    ['cursor', cursorAfter(ids.taskId)],
     ['dueDate', '2030-01-31'],
     ['email', TARGET_EMAIL],
     ['password', TARGET_PASSWORD],
