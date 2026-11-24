@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/caiodassumpcao/secure-api-pipeline/compare/v0.3.1...v0.4.0) (2026-11-24)
+
+
+### Features
+
+* devsecops pipeline with signed and attested release images ([#18](https://github.com/caiodassumpcao/secure-api-pipeline/issues/18)) ([67aafc8](https://github.com/caiodassumpcao/secure-api-pipeline/commit/67aafc8203477dd2261cc18f6d3e20502538001e))
+
+
+### Bug Fixes
+
+* **api:** reject nul characters in text input ([#21](https://github.com/caiodassumpcao/secure-api-pipeline/issues/21)) ([c2efb6b](https://github.com/caiodassumpcao/secure-api-pipeline/commit/c2efb6be09e55bf612a456eb5441b62be514edc6))
+
 ## [0.3.1](https://github.com/caiodassumpcao/secure-api-pipeline/compare/v0.3.0...v0.3.1) (2026-11-24)
 
 
