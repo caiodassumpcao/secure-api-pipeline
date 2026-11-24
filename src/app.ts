@@ -6,7 +6,7 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import type { TrustProxy } from './config/config.ts';
-import type { RateLimiter } from './lib/rate-limiter.ts';
+import { scaleRateLimits, type RateLimiter } from './lib/rate-limiter.ts';
 import type { Db } from './db/database.ts';
 import { healthRoutes, type ReadinessProbe } from './modules/health/health.routes.ts';
 import { memberRoutes } from './modules/members/members.routes.ts';
@@ -57,6 +57,8 @@ export interface AppDependencies {
     readonly limiter: RateLimiter;
     /** Coarse in-memory per-IP limit on every route. */
     readonly global: boolean;
+    /** Factor applied to every limit (RATE_LIMIT_MULTIPLIER); 1 by default. */
+    readonly multiplier?: number;
   };
   readonly http: {
     /** Browser origins allowed by CORS. */
@@ -100,7 +102,9 @@ export async function buildApp({
   await registerSecurity(app, { corsOrigins: http.corsOrigins });
   // Unsigned: cookie values are random tokens checked against their stored hash.
   await app.register(cookie);
-  if (limits.global) await registerGlobalRateLimit(app);
+  const multiplier = limits.multiplier ?? 1;
+  const limiter = scaleRateLimits(limits.limiter, multiplier);
+  if (limits.global) await registerGlobalRateLimit(app, { multiplier });
 
   // Before any route, so every route is documented.
   if (docs.enabled) await registerOpenApi(app);
@@ -109,13 +113,13 @@ export async function buildApp({
 
   const authService = instrumentService(
     'auth',
-    createAuthService({ db: database.db, ...auth, limiter: limits.limiter, metrics }),
+    createAuthService({ db: database.db, ...auth, limiter, metrics }),
   );
   await app.register(authRoutes, {
     prefix: '/v1/auth',
     service: authService,
     allowedOrigins: http.corsOrigins,
-    limiter: limits.limiter,
+    limiter,
   });
 
   await app.register(
@@ -130,7 +134,7 @@ export async function buildApp({
       });
       await v1.register(invitationRoutes, {
         service: instrumentService('invitations', createInvitationsService(database.db)),
-        limiter: limits.limiter,
+        limiter,
       });
       await v1.register(projectRoutes, {
         service: instrumentService('projects', createProjectsService(database.db)),

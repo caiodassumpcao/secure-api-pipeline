@@ -31,6 +31,17 @@ describe('global rate limit', { timeout: 20_000 }, () => {
     expect((await app.inject(request)).statusCode).toBe(429);
   });
 
+  it('is raised by RATE_LIMIT_MULTIPLIER', async () => {
+    const { app } = await buildTestApp({ globalRateLimit: true, rateLimitMultiplier: 2 });
+    const request = { method: 'GET' as const, url: '/scan/admin', remoteAddress: '203.0.113.10' };
+
+    for (let index = 0; index < GLOBAL_RATE_LIMIT.max * 2; index += 1) {
+      expect((await app.inject(request)).statusCode).toBe(404);
+    }
+
+    expect((await app.inject(request)).statusCode).toBe(429);
+  });
+
   it('leaves the health probes alone', async () => {
     const { app } = await buildTestApp({ globalRateLimit: true });
 

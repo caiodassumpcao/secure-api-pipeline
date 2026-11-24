@@ -15,6 +15,8 @@ export interface TestAppOptions {
   tokens?: TokenService;
   docs?: boolean;
   globalRateLimit?: boolean;
+  /** RATE_LIMIT_MULTIPLIER; 1 when unset. */
+  rateLimitMultiplier?: number;
   http?: Partial<AppDependencies['http']>;
 }
 
@@ -40,7 +42,11 @@ export async function buildTestApp(options: TestAppOptions = {}) {
     },
     docs: { enabled: options.docs ?? false },
     metrics: createAppMetrics(),
-    limits: { limiter: unlimited, global: options.globalRateLimit ?? false },
+    limits: {
+      limiter: unlimited,
+      global: options.globalRateLimit ?? false,
+      multiplier: options.rateLimitMultiplier,
+    },
     http: { corsOrigins: [], trustProxy: false, ...options.http },
   });
   return { app, logs, ping, migrationsApplied };

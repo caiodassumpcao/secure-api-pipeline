@@ -59,6 +59,8 @@ services:
       JWT_PRIVATE_KEY_FILE: /run/secrets/jwt_private_key
       JWT_PUBLIC_KEY_FILE: /run/secrets/jwt_public_key
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # Test environments only (the DAST stack); refused in production.
+      RATE_LIMIT_MULTIPLIER: ${RATE_LIMIT_MULTIPLIER:-}
       # Telemetry. The collector of the observability profile is
       # http://otel-lgtm:4318 (API_OTLP_ENDPOINT in .env); unset, nothing is
       # pushed. /metrics listens on 9464 inside the network, never published.

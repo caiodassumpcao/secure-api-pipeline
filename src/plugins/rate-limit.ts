@@ -12,14 +12,19 @@ export const GLOBAL_RATE_LIMIT = { max: 600, timeWindow: 60_000 } as const;
  * limits would only run after a 401 or 404 was already decided. Behind a
  * proxy, TRUST_PROXY must be set, or every client would share the proxy's
  * address. Sensitive routes add stricter limits shared by all instances
- * (src/lib/rate-limiter.ts).
+ * (src/lib/rate-limiter.ts). RATE_LIMIT_MULTIPLIER raises this limit with the
+ * others in test environments.
  */
-export async function registerGlobalRateLimit(app: FastifyInstance): Promise<void> {
+export async function registerGlobalRateLimit(
+  app: FastifyInstance,
+  { multiplier = 1 }: { multiplier?: number } = {},
+): Promise<void> {
   await app.register(rateLimit, { global: false });
   app.addHook(
     'onRequest',
     app.rateLimit({
       ...GLOBAL_RATE_LIMIT,
+      max: GLOBAL_RATE_LIMIT.max * multiplier,
       allowList: (request) => request.url.startsWith('/health/'),
       errorResponseBuilder: (_request, context) => tooManyRequests(Math.ceil(context.ttl / 1000)),
     }),

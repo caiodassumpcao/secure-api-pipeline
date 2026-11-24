@@ -242,6 +242,7 @@ All env vars validated at startup (zod); invalid config → exit 1 with precise 
 | `JWT_ISSUER` / `JWT_AUDIENCE`                    | `secure-api-pipeline`         |                                                                                                                    |
 | `CORS_ORIGINS`                                   | —                             | comma-separated origins (`scheme://host[:port]`); https only in production; also allowed to use the refresh cookie |
 | `TRUST_PROXY`                                    | off                           | proxies trusted for `X-Forwarded-For`: a hop count (1–10) or IPs/CIDRs; `true` is refused                          |
+| `RATE_LIMIT_MULTIPLIER`                          | 1                             | factor (1–1000) on every rate limit; test environments only (the DAST stack uses 100); refused in production       |
 | `API_DOCS_ENABLED`                               | `true` (dev) / `false` (prod) |                                                                                                                    |
 | `LOG_LEVEL`                                      | `info`                        | `fatal` · `error` · `warn` · `info` · `debug` · `trace` · `silent`                                                 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                    | —                             | OTLP/HTTP collector for traces, metrics and logs; unset: nothing is pushed                                         |

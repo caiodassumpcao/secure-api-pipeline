@@ -58,6 +58,15 @@ export function createRateLimiter(db: Executor): RateLimiter {
   };
 }
 
+/**
+ * Raises the maximum of every rule `multiplier` times (RATE_LIMIT_MULTIPLIER,
+ * test environments only); the limiter itself when the factor is 1.
+ */
+export function scaleRateLimits(limiter: RateLimiter, multiplier: number): RateLimiter {
+  if (multiplier === 1) return limiter;
+  return { hit: (rule, subject) => limiter.hit({ ...rule, max: rule.max * multiplier }, subject) };
+}
+
 /** Lets every request through: for tests that are not about rate limits. */
 export const unlimited: RateLimiter = {
   hit: () => Promise.resolve({ allowed: true, retryAfterSeconds: 0 }),
