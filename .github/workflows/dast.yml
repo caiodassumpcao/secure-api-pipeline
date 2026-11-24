@@ -123,15 +123,25 @@ jobs:
             index=$((index + 1))
           done
           mkdir -p reports/zap
-          cp .zap/rules.tsv reports/zap/rules.tsv
+          cp .zap/rules.tsv .zap/hooks.py reports/zap/
           # ZAP runs as uid 1000 inside its image and writes its reports here.
           chmod 777 reports/zap
           status=0
           $SCAN -e ZAP_AUTH_HEADER -e ZAP_AUTH_HEADER_VALUE -e ZAP_AUTH_HEADER_SITE zap \
             zap-api-scan.py -t http://127.0.0.1:3000/openapi.json -f openapi \
             -c rules.tsv -J zap-report.json -r zap-report.html -I -T 15 \
-            -z "$options" || status=$?
+            --hook /zap/wrk/hooks.py -z "$options" || status=$?
           if [ "$status" -gt 2 ]; then exit "$status"; fi
+
+      # The active scan is time-boxed: show what each rule covered.
+      - name: Active scan coverage
+        if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
+        run: |
+          if [ -f reports/zap/active-scan.md ]; then
+            cat reports/zap/active-scan.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::warning::ZAP did not record the active scan coverage: see the Scan step log.'
+          fi
 
       - name: Convert to SARIF
         id: report
@@ -167,6 +177,7 @@ jobs:
           path: |
             reports/zap/zap-report.json
             reports/zap/zap-report.html
+            reports/zap/active-scan.json
           retention-days: 7
 
       - name: Show API logs
