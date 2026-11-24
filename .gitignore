@@ -37,14 +37,15 @@ keys/
 *.crt
 *.p12
 
-# Security scanner reports generated locally
-zap-report.*
-zap-*.html
-zap-*.json
-zap-*.md
-zap-*.xml
-trivy-*.json
-trivy-*.sarif
+# Security scanner reports generated locally (at the root; scripts/ holds
+# the tools that produce or read them)
+/zap-report.*
+/zap-*.html
+/zap-*.json
+/zap-*.md
+/zap-*.xml
+/trivy-*.json
+/trivy-*.sarif
 *.sarif
 sbom*.json
 sbom*.spdx
