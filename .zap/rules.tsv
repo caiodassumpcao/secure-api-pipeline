@@ -1,0 +1,4 @@
+# ZAP rule configuration for the API scan (dast.yml), tab separated:
+# <plugin id>	IGNORE|WARN|FAIL	(<name>)
+# IGNORE removes an alert from code scanning and from the gate: only with its
+# reason in docs/security-pipeline.md ("Exceptions").
