@@ -7,6 +7,8 @@
   unauthenticated scan would only see 401s.
 - Policy: DAST_POLICY is a policy file (pull requests) or "all" (the full
   scan, every installed rule it can run here).
+- False positives: alert filters for the exceptions listed, with their reasons,
+  in docs/security-pipeline.md (Exceptions).
 - Coverage: before ZAP shuts down, record what every rule did, the status
   code of every active scan response and the renewals, for the job summary and
   for scripts/zap-coverage.ts, which fails the job unless every rule
@@ -35,6 +37,15 @@ LOGIN_ATTEMPTS = 6
 # Rules the full scan cannot run here: Log4Shell needs an out-of-band (OAST)
 # callback service, which the CI does not run, and targets Java's Log4j.
 NOT_RUNNABLE = {"40043"}
+
+# PII Disclosure reads any Luhn-valid run of digits as a card number. Every
+# error response carries a random UUID (traceId) whose last group is twelve
+# hex characters, and now and then those are twelve digits that pass the
+# check. Twelve-digit matches become Informational: they still reach code
+# scanning, while card-length numbers (13 to 19 digits) still block.
+ALERT_FILTERS = [
+    {"ruleid": "10062", "newlevel": "0", "evidence": "^[0-9]{12}$", "evidenceisregex": "true"},
+]
 
 _state = {"renewals": 0, "renewal_failures": 0}
 _stop = threading.Event()
@@ -106,6 +117,8 @@ def _use_policy(zap):
 
 
 def zap_started(zap, target):
+    for alert_filter in ALERT_FILTERS:
+        zap.alertFilter.add_global_alert_filter(**alert_filter, enabled="true")
     _authorize(zap, _login(), 0)
     threading.Thread(target=_renew, args=(zap,), daemon=True).start()
     _use_policy(zap)
