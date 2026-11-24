@@ -1,4 +1,5 @@
-import type { IncomingMessage } from 'node:http';
+import { IncomingMessage } from 'node:http';
+import { Socket } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { generateRequestId, REQUEST_ID_HEADER } from '../../../src/plugins/request-id.ts';
 import { buildTestApp } from '../../helpers/test-app.ts';
@@ -6,7 +7,9 @@ import { buildTestApp } from '../../helpers/test-app.ts';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function requestWith(headers: IncomingMessage['headers']): IncomingMessage {
-  return { headers } as IncomingMessage;
+  const request = new IncomingMessage(new Socket());
+  request.headers = headers;
+  return request;
 }
 
 describe('generateRequestId', () => {

@@ -201,7 +201,7 @@ describe('an unreachable collector', () => {
     const port = typeof address === 'object' && address !== null ? address.port : 0;
     api = await startApiProcess({
       DATABASE_URL: database.url,
-      ...exportingTo({ url: `http://127.0.0.1:${port}` } as OtlpReceiver),
+      ...exportingTo({ url: `http://127.0.0.1:${port}` }),
     });
   });
 
