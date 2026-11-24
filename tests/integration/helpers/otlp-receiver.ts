@@ -53,7 +53,7 @@ function toRecord(attributes: KeyValue[] | undefined): Record<string, unknown> {
 }
 
 /** Env for an API process that exports everything, quickly, to `receiver`. */
-export function exportingTo(receiver: OtlpReceiver): Record<string, string> {
+export function exportingTo(receiver: Pick<OtlpReceiver, 'url'>): Record<string, string> {
   return {
     OTEL_EXPORTER_OTLP_ENDPOINT: receiver.url,
     OTEL_TRACES_SAMPLER_ARG: '1',

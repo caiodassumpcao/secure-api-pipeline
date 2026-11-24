@@ -18,6 +18,10 @@ export interface TestAppOptions {
   http?: Partial<AppDependencies['http']>;
 }
 
+// Unit tests never reach a repository: the handle is a placeholder, not a
+// Drizzle instance (integration tests use a real database).
+const placeholderDb = {} as unknown as Db;
+
 /**
  * Builds the real app with an in-memory log sink and a stubbed database: for
  * unit tests that never reach a repository (integration tests use a real one).
@@ -29,7 +33,7 @@ export async function buildTestApp(options: TestAppOptions = {}) {
   const migrationsApplied = vi.fn(options.migrationsApplied ?? (() => Promise.resolve(true)));
   const app = await buildApp({
     logger,
-    database: { ping, migrationsApplied, db: {} as Db },
+    database: { ping, migrationsApplied, db: placeholderDb },
     auth: {
       tokens: options.tokens ?? (await createTestTokenService()),
       passwords: createPasswordHasher(),
