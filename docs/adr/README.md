@@ -9,7 +9,7 @@ Significant technical decisions, why they were made and what they cost. An accep
 | [0003](0003-pnpm-and-release-please.md)                  | pnpm and release-please for versioning                          | Accepted |
 | [0004](0004-token-strategy.md)                           | Token strategy: short JWT + rotating opaque refresh tokens      | Accepted |
 | [0005](0005-tenant-isolation-at-repository-layer.md)     | Tenant isolation enforced at repository layer                   | Accepted |
-| 0006                                                     | OpenTelemetry for traces and metrics                            | Planned  |
+| [0006](0006-opentelemetry-telemetry.md)                  | OpenTelemetry for traces, metrics and correlated logs           | Accepted |
 | 0007                                                     | Supply-chain security: SBOM, cosign keyless, SLSA provenance    | Planned  |
 | 0008                                                     | Expand/contract migrations for safe rollbacks                   | Planned  |
 | [0009](0009-brute-force-protection.md)                   | Brute-force protection: rate limits, lockout and device cookies | Accepted |

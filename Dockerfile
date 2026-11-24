@@ -26,9 +26,13 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --prod --ignore-scripts
 
 FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS runtime
+# The metrics port listens inside the Docker network only: it is never
+# published (compose.yaml) nor routed by the proxy.
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
-    PORT=3000
+    PORT=3000 \
+    METRICS_HOST=0.0.0.0 \
+    METRICS_PORT=9464
 WORKDIR /app
 # Application files stay owned by root: the runtime user can read, not modify, them.
 COPY package.json ./
@@ -41,4 +45,5 @@ USER node
 EXPOSE 3000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
     CMD ["node", "dist/healthcheck.js"]
-CMD ["node", "dist/main.js"]
+# The telemetry preload must run before the app imports anything (ADR-0006).
+CMD ["node", "--import", "./dist/telemetry/instrument.js", "dist/main.js"]

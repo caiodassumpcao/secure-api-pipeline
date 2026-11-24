@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { HttpProblem, ProblemTypes } from '../lib/problem.ts';
 import type { TokenService } from '../modules/auth/tokens.ts';
+import { annotateRequestSpan } from '../telemetry/request-span.ts';
 
 export interface AuthenticatedUser {
   readonly id: string;
@@ -45,6 +46,17 @@ export function registerAuthentication(app: FastifyInstance, authenticate: Authe
       throw new HttpProblem(ProblemTypes.unauthorized, 'Authentication is required.');
     }
     request.user = user;
+    annotateRequestSpan({ 'user.id': user.id });
+    // Later log lines of the request, "request completed" included, name the
+    // user by id only (DESIGN §6).
+    request.log = request.log.child({ user_id: user.id });
+    reply.log = request.log;
+  });
+  // Params are validated by now; workspace-scoped routes name their tenant.
+  app.addHook('preHandler', (request, _reply, done) => {
+    const params = request.params as { wsId?: unknown } | undefined;
+    if (typeof params?.wsId === 'string') annotateRequestSpan({ 'workspace.id': params.wsId });
+    done();
   });
 }
 
