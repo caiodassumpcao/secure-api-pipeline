@@ -1,0 +1,6 @@
+# Trivy exceptions (ADR-0007): misconfigurations of the repository and
+# vulnerabilities of the images. An entry is added only with a statement of
+# why it does not apply or why the risk is accepted, an expiry date where it
+# is temporary, and a row in docs/security-pipeline.md ("Exceptions").
+misconfigurations: []
+vulnerabilities: []

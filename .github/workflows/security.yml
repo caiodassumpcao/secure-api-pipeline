@@ -1,0 +1,267 @@
+name: security
+
+# Static analysis, secrets, dependencies and configuration (ADR-0007). Every
+# job uploads its full SARIF report to code scanning, then fails on what
+# blocks a merge. Scanners run from the images pinned in
+# .github/scanners/compose.yaml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # New advisories and rules reach main even without new commits.
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+  SCAN: docker compose -f .github/scanners/compose.yaml --project-directory . run --rm
+
+jobs:
+  codeql:
+    name: codeql
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # TypeScript needs no build for CodeQL; `actions` analyses the workflows
+      # themselves (script injection, untrusted checkouts, permissions).
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          languages: javascript-typescript, actions
+          build-mode: none
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          output: reports/codeql
+          upload: always
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Fail on high or critical alerts
+        run: |
+          status=0
+          for report in reports/codeql/*.sarif; do
+            node scripts/scan-gate.ts sarif "$report" --min-security-severity 7 || status=1
+          done
+          exit "$status"
+
+  semgrep:
+    name: semgrep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Every severity goes to code scanning; only ERROR blocks.
+      - name: Scan
+        run: |
+          mkdir -p reports
+          $SCAN semgrep semgrep scan \
+            --config p/owasp-top-ten --config p/nodejs --config p/typescript \
+            --metrics off --disable-version-check \
+            --sarif --output reports/semgrep.sarif
+
+      - name: Upload to code scanning
+        if: ${{ !cancelled() && hashFiles('reports/semgrep.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: reports/semgrep.sarif
+          category: semgrep
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Fail on ERROR findings
+        run: node scripts/scan-gate.ts sarif reports/semgrep.sarif --level error
+
+  secrets:
+    name: secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Pull requests: their commits. Pushes: the pushed commits. The weekly
+      # run: the whole history. Secrets are redacted from the report.
+      - name: Scan
+        id: scan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set --
+          case "$EVENT" in
+            pull_request) set -- --log-opts "$BASE..$HEAD" ;;
+            push) [ "$BEFORE" = 0000000000000000000000000000000000000000 ] || set -- --log-opts "$BEFORE..$AFTER" ;;
+          esac
+          mkdir -p reports
+          status=0
+          $SCAN --user "$(id -u):$(id -g)" gitleaks git --redact --no-banner "$@" \
+            --report-format sarif --report-path reports/gitleaks.sarif \
+            --exit-code 2 . || status=$?
+          case "$status" in
+            0) ;;
+            2) echo "leaks=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$status" ;;
+          esac
+
+      - name: Upload to code scanning
+        if: ${{ !cancelled() && hashFiles('reports/gitleaks.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: reports/gitleaks.sarif
+          category: gitleaks
+
+      - name: Fail on secrets
+        if: ${{ steps.scan.outputs.leaks == 'true' }}
+        run: |
+          echo '::error::Gitleaks found secrets: see the Security tab or the job log above.'
+          exit 1
+
+  dependencies:
+    name: dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # One report for code scanning, one to gate on (osv-scanner.toml holds
+      # the documented exceptions). Exit code 1 only means "vulnerabilities
+      # found"; anything else is an error.
+      - name: OSV-Scanner
+        run: |
+          mkdir -p reports
+          for format in sarif json; do
+            status=0
+            $SCAN osv-scanner scan source --lockfile pnpm-lock.yaml \
+              --format "$format" --output-file "reports/osv.$format" || status=$?
+            if [ "$status" -gt 1 ]; then exit "$status"; fi
+          done
+
+      - name: Upload to code scanning
+        if: ${{ !cancelled() && hashFiles('reports/osv.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: reports/osv.sarif
+          category: osv-scanner
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Fail on CVSS 7.0 or more
+        run: node scripts/scan-gate.ts osv reports/osv.json --min-cvss 7
+
+      # A second, independent opinion on what ships in the image.
+      - name: pnpm audit (production dependencies)
+        if: ${{ !cancelled() }}
+        run: |
+          corepack enable
+          pnpm audit --prod --audit-level high
+
+  trivy-config:
+    name: trivy-config
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Misconfigurations only: dependency advisories come from OSV-Scanner,
+      # image packages from container.yml. .trivyignore.yaml holds the
+      # documented exceptions.
+      - name: Scan
+        run: |
+          mkdir -p reports
+          $SCAN trivy config --ignorefile .trivyignore.yaml \
+            --format sarif --output reports/trivy-config.sarif .
+
+      - name: Upload to code scanning
+        if: ${{ !cancelled() && hashFiles('reports/trivy-config.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: reports/trivy-config.sarif
+          category: trivy-config
+
+      - name: Fail on HIGH or CRITICAL
+        run: |
+          $SCAN trivy config --ignorefile .trivyignore.yaml \
+            --severity HIGH,CRITICAL --exit-code 1 .
