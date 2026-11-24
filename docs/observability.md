@@ -29,8 +29,10 @@ Then open Grafana at <http://localhost:3001> (no login: anonymous visitors are a
 - Metrics are pushed every 60 seconds by default; `OTEL_METRIC_EXPORT_INTERVAL=10000` makes the dashboard livelier.
 - Traces reach Tempo some 20 seconds after the request.
 - Data lives in the container: `docker compose down` deletes it.
+- With the profile on, the API starts once `otel-lgtm` is healthy (some 20 seconds), so no telemetry is pushed into a half-started stack.
+- `ENABLE_LOGS_LOKI=true` and `ENABLE_LOGS_OTELCOL=true` in `.env` print the logs of Loki and of the collector, silenced by default.
 
-`pnpm smoke:observability` sends traffic and checks every signal end to end, as the `observability` CI job does (`SMOKE_API_URL` if the API is not on port 3000).
+`pnpm smoke:observability` sends traffic and checks every signal end to end, as the `observability` CI job does (`SMOKE_API_URL` if the API is not on port 3000). While it waits for Tempo and Loki it keeps creating a task every 5 seconds, and the trace and the log line it checks belong to the same request. On a Loki timeout it prints the last response and the collector's counters of log records received and sent, which tell whether the records stopped at the API, the collector or Loki. In CI, a failed run keeps the Compose logs, with tokens and cookies masked, as an artifact for 3 days.
 
 ## What to look at
 
