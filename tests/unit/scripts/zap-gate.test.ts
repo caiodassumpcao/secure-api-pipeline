@@ -1,6 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { type Coverage, coverageProblems, policyRules } from '../../../scripts/zap-coverage.ts';
+import {
+  apiStatusProblems,
+  type Coverage,
+  coverageProblems,
+  policyRules,
+  serverErrorProblems,
+} from '../../../scripts/zap-gate.ts';
 
 type Rule = NonNullable<Coverage['rules']>[number];
 
@@ -80,5 +86,42 @@ describe('coverageProblems', () => {
       'rule 40022 is enabled in the policy but did not run',
       'rule 90034 is enabled in the policy but did not run',
     ]);
+  });
+});
+
+describe('serverErrorProblems', () => {
+  it('names every 5xx status with its count, in order', () => {
+    const codes = { '200': 330, '503': 1, '400': 3662, '500': 4 };
+
+    expect(serverErrorProblems('the active scan (ZAP)', codes)).toEqual([
+      'the active scan (ZAP) answered 500 4 time(s)',
+      'the active scan (ZAP) answered 503 1 time(s)',
+    ]);
+  });
+
+  it('accepts any number of 4xx, and 5xx counted zero times', () => {
+    expect(serverErrorProblems('ZAP', { '400': 3662, '429': 12, '500': 0 })).toEqual([]);
+  });
+
+  it('ignores responses without a status', () => {
+    expect(serverErrorProblems('ZAP', { none: 3, '200': 1 })).toEqual([]);
+  });
+});
+
+describe('apiStatusProblems', () => {
+  it('reports the 5xx the API logged', () => {
+    expect(apiStatusProblems({ '200': 345, '500': 4 })).toEqual([
+      'the API (request log) answered 500 4 time(s)',
+    ]);
+  });
+
+  it('refuses empty counts, which would pass any scan', () => {
+    expect(apiStatusProblems({})).toEqual([
+      'the API logged no completed request: its responses cannot be checked',
+    ]);
+  });
+
+  it('accepts a log without server errors', () => {
+    expect(apiStatusProblems({ '200': 345, '404': 134 })).toEqual([]);
   });
 });

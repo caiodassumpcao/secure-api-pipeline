@@ -70,7 +70,8 @@ jobs:
               - 'scripts/seed.ts'
               - 'scripts/dast-openapi.ts'
               - 'scripts/zap-report.ts'
-              - 'scripts/zap-coverage.ts'
+              - 'scripts/zap-gate.ts'
+              - 'scripts/api-status.ts'
               - '.zap/**'
               - '.github/scanners/**'
               - '.github/workflows/dast.yml'
@@ -164,22 +165,12 @@ jobs:
           fi
 
       # The API's own count of what it answered during the job, as a check on
-      # ZAP's.
+      # ZAP's; the gate below fails on any 5xx in either.
       - name: API responses by status
         if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
         run: |
-          docker compose logs api --no-log-prefix --no-color | node -e '
-            const counts = {};
-            for (const line of require("node:fs").readFileSync(0, "utf8").split("\n")) {
-              let entry;
-              try { entry = JSON.parse(line); } catch { continue; }
-              if (entry.msg !== "request completed") continue;
-              const code = entry.res?.statusCode ?? "none";
-              counts[code] = (counts[code] ?? 0) + 1;
-            }
-            const list = Object.entries(counts).map(([code, n]) => `${code}: ${n}`).join(", ");
-            process.stdout.write(`\nAPI responses by status (whole job): ${list}.\n`);
-          ' | tee -a "$GITHUB_STEP_SUMMARY"
+          docker compose logs api --no-log-prefix --no-color \
+            | node scripts/api-status.ts reports/zap/api-status.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Convert to SARIF
         id: report
@@ -216,6 +207,7 @@ jobs:
             reports/zap/zap-report.json
             reports/zap/zap-report.html
             reports/zap/active-scan.json
+            reports/zap/api-status.json
           retention-days: 7
 
       - name: Show API logs
@@ -232,12 +224,15 @@ jobs:
           echo '::error::ZAP raised High alerts: see the Security tab and the zap-report artifact.'
           exit 1
 
-      - name: Fail on an incomplete scan
+      # Every rule of the policy must run to the end, and the API must answer
+      # no 5xx, whatever severity ZAP gives it (scripts/zap-gate.ts).
+      - name: Fail on an incomplete scan or a server error
         if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
         env:
           MODE: ${{ steps.run.outputs.mode }}
         run: |
           policy=()
           if [ "$MODE" = pr ]; then policy=(--policy .zap/pr.policy); fi
-          node scripts/zap-coverage.ts reports/zap/active-scan.json "${policy[@]}" \
-            || { echo '::error::The active scan did not run every rule of its policy to the end.'; exit 1; }
+          node scripts/zap-gate.ts reports/zap/active-scan.json \
+            --api-status reports/zap/api-status.json "${policy[@]}" \
+            || { echo '::error::The scan was incomplete or the API answered a 5xx: see the job summary.'; exit 1; }
