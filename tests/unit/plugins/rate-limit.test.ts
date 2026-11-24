@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { GLOBAL_RATE_LIMIT } from '../../../src/plugins/rate-limit.ts';
 import { buildTestApp } from '../../helpers/test-app.ts';
 
-describe('global rate limit', () => {
+// Each test sends the whole quota (600 requests): some 2.5 s on a quiet
+// machine, past the default 5 s when the suite shares a loaded CPU.
+describe('global rate limit', { timeout: 20_000 }, () => {
   it('answers 429 problems with Retry-After once an IP exceeds it', async () => {
     const { app } = await buildTestApp({ globalRateLimit: true });
     const request = { method: 'GET' as const, url: '/v1/workspaces', remoteAddress: '203.0.113.7' };
