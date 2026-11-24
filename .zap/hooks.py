@@ -6,7 +6,7 @@
   any length stays authenticated. A failed first login fails the scan: an
   unauthenticated scan would only see 401s.
 - Policy: DAST_POLICY is a policy file (pull requests) or "all" (the full
-  scan, every installed rule).
+  scan, every installed rule it can run here).
 - Coverage: before ZAP shuts down, record what every rule did, the status
   code of every active scan response and the renewals, for the job summary and
   for scripts/zap-coverage.ts, which fails the job unless every rule
@@ -32,6 +32,9 @@ DETAILS = "/zap/wrk/active-scan.json"
 BATCH = 500
 RENEW_EVERY_SECONDS = 600
 LOGIN_ATTEMPTS = 6
+# Rules the full scan cannot run here: Log4Shell needs an out-of-band (OAST)
+# callback service, which the CI does not run, and targets Java's Log4j.
+NOT_RUNNABLE = {"40043"}
 
 _state = {"renewals": 0, "renewal_failures": 0}
 _stop = threading.Event()
@@ -94,6 +97,7 @@ def _use_policy(zap):
     if policy == "all":
         name = "Default Policy"
         zap.ascan.enable_all_scanners(scanpolicyname=name)
+        zap.ascan.disable_scanners(ids=",".join(NOT_RUNNABLE), scanpolicyname=name)
     else:
         zap.ascan.import_scan_policy(path=policy)
         name = re.search(r"<policy>(.+?)</policy>", open(policy, encoding="utf-8").read())[1]

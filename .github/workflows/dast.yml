@@ -100,14 +100,14 @@ jobs:
           package-manager-cache: false
 
       # Development values; throwaway keys; the stack is discarded at the end.
-      # Rate limits are raised a hundredfold so the scanner reaches the
+      # Rate limits are raised a thousandfold so the scanner reaches the
       # handlers instead of a 429 (refused in production); the integration
       # tests prove the limits themselves.
       - name: Start the stack
         if: ${{ steps.run.outputs.scan == 'true' }}
         run: |
           cp .env.example .env
-          echo 'RATE_LIMIT_MULTIPLIER=100' >> .env
+          echo 'RATE_LIMIT_MULTIPLIER=1000' >> .env
           node scripts/generate-keys.ts
           chmod 644 keys/jwt-private.pem
           docker compose up --detach --build --wait --wait-timeout 180
