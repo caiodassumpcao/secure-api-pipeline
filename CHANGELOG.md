@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/caiodassumpcao/secure-api-pipeline/compare/v0.2.0...v0.3.0) (2026-11-24)
+
+
+### Features
+
+* opentelemetry traces, metrics and correlated logs ([#11](https://github.com/caiodassumpcao/secure-api-pipeline/issues/11)) ([b9733df](https://github.com/caiodassumpcao/secure-api-pipeline/commit/b9733df7e5faa3c8072ed4d5d29b899e6191c0b7))
+
 ## [0.2.0](https://github.com/caiodassumpcao/secure-api-pipeline/compare/v0.1.1...v0.2.0) (2026-11-17)
 
 
