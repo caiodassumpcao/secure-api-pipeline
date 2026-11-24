@@ -71,11 +71,22 @@ The DAST scan seeds an owner's workspace, with a project, a task and a pending i
 
 No required check filters its trigger by path, which would leave it pending forever on a pull request it skips. `build-scan`, `image-arm64` and `zap` always run and report; on a pull request that changes no source, dependency, image or Compose file, they skip their steps inside the job, as `observability` does. Pushes to `main` and releases always run everything. A check joins the ruleset only after three consecutive passing runs.
 
+### Why `zap` gates every pull request
+
+`zap` is the slowest gate, at about 11 minutes. Almost all of that is the active scan, which is time-boxed at 10 minutes (`scanner.maxScanDurationInMins`) so that it ends before the member's access token expires (15 minutes). It runs on one thread with a 120 ms delay between requests to stay under the API's global rate limit of 600 requests a minute. It is still required on every pull request that changes what the API serves:
+
+- It is the only gate that sees the running API: security headers, error bodies, the authorization of every route over HTTP, and injection reachable through the real stack. The unit and integration suites check the cases we thought of. The scan probes the ones we did not.
+- Scanning only `main` would find a regression after the merge, when a release pull request may already contain it.
+- The cost is bounded. The job runs in parallel with the other checks, so it adds waiting time but no extra work. It skips the scan when a pull request changes nothing the API serves (documentation, other workflows and tests only), and a new push cancels the run it supersedes. This repository has a single maintainer and is owned by a user account, so no merge queue is available to move the scan to merge time.
+- Making it faster would weaken it. Raising the rate limit in CI would scan a configuration we do not ship. A passive baseline on pull requests, with the full scan only on `main`, would move injection findings to after the merge.
+
+The job summary shows what the active scan covered within its budget, rule by rule ([`.zap/hooks.py`](../.zap/hooks.py)), so a scan cut short by the time box is visible rather than passing as complete. The `zap-report` artifact keeps the same data as JSON.
+
 ## The pipeline's own supply chain
 
 - **Actions** are pinned by full commit SHA, with the version in a comment, and the repository refuses unpinned ones. Composite actions in use pin their own dependencies the same way.
 - **Scanners** run as container images pinned by tag and digest in [`.github/scanners/compose.yaml`](../.github/scanners/compose.yaml); no scanner is downloaded as "latest" at run time. Trivy runs from its image, not through `trivy-action`, whose tags were hijacked in March 2026 ([GHSA-69fq-xp46-6x23](https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23)).
-- **Dependabot** updates actions, scanner images, base images and npm packages after a three-day cooldown; its pull requests run every gate above.
+- **Dependabot** updates actions, scanner images, base images and npm packages after a three-day cooldown; its pull requests run every gate above. Runs that Dependabot triggers get no Actions secrets and a read-only token unless a job's `permissions` ask for more. No required check uses a secret, and each one that uploads SARIF asks for `security-events: write`. Its pull requests are merged by hand, so the push to `main` that follows runs as the maintainer with the usual permissions.
 - **Permissions** are empty at workflow level and granted per job. `packages: write`, `id-token: write` and `attestations: write` exist in the `publish` job only; `contents: write` in `release-assets` only. No job uses `pull_request_target`, and checkouts do not keep credentials.
 - **harden-runner** records the network egress of every job (audit mode).
 
