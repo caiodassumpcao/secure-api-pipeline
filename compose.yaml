@@ -74,6 +74,12 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      # With the observability profile on, the API starts once the collector
+      # and Loki are ready, so no telemetry is pushed into a half-started
+      # stack. Without the profile the dependency is ignored.
+      otel-lgtm:
+        condition: service_healthy
+        required: false
     read_only: true
     tmpfs:
       - /tmp
@@ -99,6 +105,16 @@ services:
     volumes:
       - ./observability/grafana/provisioning/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/secure-api.yaml:ro
       - ./observability/grafana/dashboards:/otel-lgtm/dashboards/secure-api:ro
+    environment:
+      # Output of Loki and of the collector, silenced by default; CI turns it
+      # on so a failed smoke test can be diagnosed.
+      ENABLE_LOGS_LOKI: ${ENABLE_LOGS_LOKI:-false}
+      ENABLE_LOGS_OTELCOL: ${ENABLE_LOGS_OTELCOL:-false}
+    # The image's own check, which runs every 30 s: probed every second while
+    # the stack starts, so the API waiting for it is not held back.
+    healthcheck:
+      start_period: 60s
+      start_interval: 1s
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

@@ -51,7 +51,11 @@ describe('compose.yaml', () => {
 
     expect(lgtm?.profiles).toEqual(['observability']);
     expect(lgtm?.volumes?.every((volume) => volume.endsWith(':ro'))).toBe(true);
-    expect(Object.keys(compose.services.api?.depends_on ?? {})).not.toContain('otel-lgtm');
+    // With the profile on, the API waits for the stack; without it, it starts alone.
+    expect(compose.services.api?.depends_on?.['otel-lgtm']).toEqual({
+      condition: 'service_healthy',
+      required: false,
+    });
     expect(compose.services.api?.environment?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe(
       '${API_OTLP_ENDPOINT:-}',
     );
