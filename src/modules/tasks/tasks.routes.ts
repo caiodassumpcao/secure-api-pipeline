@@ -8,6 +8,7 @@ import {
   NOT_EMPTY_MESSAGE,
   notEmpty,
   problemResponses,
+  textSchema,
   timestampSchema,
 } from '../../lib/schemas.ts';
 import { currentUser } from '../../plugins/authentication.ts';
@@ -15,8 +16,8 @@ import type { TasksService } from './tasks.service.ts';
 
 const statusSchema = z.enum(TASK_STATUSES);
 const prioritySchema = z.enum(TASK_PRIORITIES);
-const titleSchema = z.string().trim().min(1).max(200);
-const descriptionSchema = z.string().max(5_000).nullable();
+const titleSchema = textSchema.trim().min(1).max(200);
+const descriptionSchema = textSchema.max(5_000).nullable();
 const dueDateSchema = z.iso.date().nullable().describe('Calendar date (YYYY-MM-DD).');
 
 export const taskSchema = z

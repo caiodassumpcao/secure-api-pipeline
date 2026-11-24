@@ -11,8 +11,9 @@
   in docs/security-pipeline.md (Exceptions).
 - Coverage: before ZAP shuts down, record what every rule did, the status
   code of every active scan response and the renewals, for the job summary and
-  for scripts/zap-coverage.ts, which fails the job unless every rule
-  completed. Recording errors are logged and never fail the scan on their own.
+  for scripts/zap-gate.ts, which fails the job unless every rule completed and
+  no response was a 5xx. Recording errors are logged and never fail the scan
+  on their own.
 
 zap-api-scan.py does not catch exceptions raised by hooks.
 

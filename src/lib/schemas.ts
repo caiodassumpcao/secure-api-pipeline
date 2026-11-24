@@ -3,7 +3,18 @@ import { PROBLEM_CONTENT_TYPE, problemDetailsSchema } from './problem.ts';
 
 export const idSchema = z.uuid();
 
-export const nameSchema = z.string().trim().min(1).max(100);
+/**
+ * Base of every text input: NUL (U+0000) is refused with a 400. PostgreSQL
+ * cannot store it in text, so a value that carries one would fail the query
+ * and end in a 500; argon2 inputs and lookups are no place for it either.
+ * Every string in a request schema derives from this one, which the security
+ * suite checks for each string field of the OpenAPI document.
+ */
+export const textSchema = z
+  .string()
+  .refine((value) => !value.includes('\u0000'), { error: 'Must not contain NUL characters' });
+
+export const nameSchema = textSchema.trim().min(1).max(100);
 
 export const timestampSchema = z.iso.datetime();
 

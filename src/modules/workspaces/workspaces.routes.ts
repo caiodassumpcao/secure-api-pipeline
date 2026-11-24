@@ -9,14 +9,14 @@ import {
   NOT_EMPTY_MESSAGE,
   notEmpty,
   problemResponses,
+  textSchema,
   timestampSchema,
 } from '../../lib/schemas.ts';
 import { currentUser } from '../../plugins/authentication.ts';
 import { requestContext } from '../audit/audit.ts';
 import type { WorkspacesService } from './workspaces.service.ts';
 
-const slugSchema = z
-  .string()
+const slugSchema = textSchema
   .regex(/^[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])$/, 'Use 3–48 lowercase letters, digits or hyphens')
   .describe('Unique, URL-friendly identifier.');
 
