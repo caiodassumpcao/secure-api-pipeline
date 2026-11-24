@@ -86,7 +86,7 @@ Rules enforced by the services:
 
 ## 3. API
 
-Base path `/v1`. JSON only. Errors follow **RFC 9457** (`application/problem+json`) with `type`, `title`, `status`, `detail`, `instance`, `traceId`. Validation errors include `errors[]` with field paths. Never leak stack traces or SQL.
+Base path `/v1`. JSON only. Errors follow **RFC 9457** (`application/problem+json`) with `type`, `title`, `status`, `detail`, `instance`, `traceId`. Validation errors include `errors[]` with field paths. Every text input derives from one shared schema that refuses NUL (U+0000), which PostgreSQL cannot store, so it is a 400 rather than a failed query; a security test sends it to every string field of the OpenAPI document. Never leak stack traces or SQL.
 
 | Method           | Path                                             | Auth   | Description                                                    |
 | ---------------- | ------------------------------------------------ | ------ | -------------------------------------------------------------- |

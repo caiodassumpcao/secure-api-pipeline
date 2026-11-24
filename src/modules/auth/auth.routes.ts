@@ -3,7 +3,14 @@ import { z } from 'zod';
 import { HttpProblem, ProblemTypes } from '../../lib/problem.ts';
 import { rateLimitBy, tooManyRequests, type RateLimiter } from '../../lib/rate-limiter.ts';
 import { ROLES } from '../../db/schema.ts';
-import { idSchema, noContentSchema, problemResponses, timestampSchema } from '../../lib/schemas.ts';
+import {
+  idSchema,
+  nameSchema,
+  noContentSchema,
+  problemResponses,
+  textSchema,
+  timestampSchema,
+} from '../../lib/schemas.ts';
 import { currentUser } from '../../plugins/authentication.ts';
 import { requestContext } from '../audit/audit.ts';
 import { INVALID_CREDENTIALS, type AuthService } from './auth.service.ts';
@@ -25,13 +32,13 @@ import {
   REGISTER_PER_IP,
 } from './policy.ts';
 
-export const emailSchema = z.string().trim().toLowerCase().pipe(z.email().max(254));
+export const emailSchema = textSchema.trim().toLowerCase().pipe(z.email().max(254));
 
 /**
  * Bounded only against abuse; the password policy reports length problems
  * (counted in characters, not bytes) on registration.
  */
-export const passwordSchema = z.string().min(1).max(1_024);
+export const passwordSchema = textSchema.min(1).max(1_024);
 
 export const userSchema = z
   .object({
@@ -83,7 +90,7 @@ export const authRoutes: FastifyPluginCallbackZod<AuthRoutesOptions> = (
             password: passwordSchema.describe(
               '12 to 128 characters; common breached passwords are refused.',
             ),
-            name: z.string().trim().min(1).max(100),
+            name: nameSchema,
           })
           .strict(),
         response: { 201: userSchema, ...problemResponses(400, 409, 429) },
