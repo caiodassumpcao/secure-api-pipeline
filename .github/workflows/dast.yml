@@ -1,30 +1,43 @@
 name: dast
 
 # OWASP ZAP API scan of the running stack (ADR-0007), authenticated as a
-# workspace member seeded with synthetic data. Alerts go to code scanning;
-# High alerts block.
+# workspace member seeded with synthetic data. Two modes share this job:
+#
+# - zap (pull requests and main; a required check): the rules that apply to a
+#   JSON API on Node.js and PostgreSQL (.zap/pr.policy), time-boxed;
+# - zap-full (nightly, releases, on demand; not required): every installed
+#   rule, with no budget short of the job's timeout.
+#
+# Alerts go to code scanning; High alerts block. A scan that did not run every
+# rule of its policy to the end fails, whatever it found.
 
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: '41 3 * * *'
+  release:
+    types: [published]
+  workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   SCAN: docker compose -f .github/scanners/compose.yaml --project-directory . run --rm
+  FULL: ${{ contains(fromJSON('["schedule", "release", "workflow_dispatch"]'), github.event_name) }}
 
 jobs:
-  # Required check: runs on every pull request and always reports. The scan is
-  # skipped when nothing the API serves changed; pushes to main always scan.
+  # Required check as zap: runs on every pull request and always reports. The
+  # scan is skipped when nothing the API serves changed; main always scans.
   zap:
-    name: zap
+    name: ${{ contains(fromJSON('["schedule", "release", "workflow_dispatch"]'), github.event_name) && 'zap-full' || 'zap' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: ${{ contains(fromJSON('["schedule", "release", "workflow_dispatch"]'), github.event_name) && 200 || 30 }}
     permissions:
       contents: read
       # dorny/paths-filter lists the files of the pull request through the API.
@@ -55,19 +68,25 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'compose.yaml'
               - 'scripts/seed.ts'
+              - 'scripts/dast-openapi.ts'
               - 'scripts/zap-report.ts'
+              - 'scripts/zap-coverage.ts'
               - '.zap/**'
               - '.github/scanners/**'
               - '.github/workflows/dast.yml'
 
+      # pr: the pull request policy within 12 minutes. full: every rule within
+      # 180 minutes. A scan cut by either budget fails the coverage gate.
       - name: Decide
         id: run
         env:
           EVENT: ${{ github.event_name }}
           CHANGED: ${{ steps.changes.outputs.api }}
         run: |
-          if [ "$EVENT" != pull_request ] || [ "$CHANGED" = true ]; then
-            echo "scan=true" >> "$GITHUB_OUTPUT"
+          if [ "$FULL" = true ]; then
+            { echo "scan=true"; echo "mode=full"; echo "policy=all"; echo "budget=180"; } >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" != pull_request ] || [ "$CHANGED" = true ]; then
+            { echo "scan=true"; echo "mode=pr"; echo "policy=/zap/wrk/pr.policy"; echo "budget=12"; } >> "$GITHUB_OUTPUT"
           else
             echo "scan=false" >> "$GITHUB_OUTPUT"
             echo "Nothing the API serves changed: DAST scan skipped." >> "$GITHUB_STEP_SUMMARY"
@@ -81,59 +100,60 @@ jobs:
           package-manager-cache: false
 
       # Development values; throwaway keys; the stack is discarded at the end.
+      # Rate limits are raised a hundredfold so the scanner reaches the
+      # handlers instead of a 429 (refused in production); the integration
+      # tests prove the limits themselves.
       - name: Start the stack
         if: ${{ steps.run.outputs.scan == 'true' }}
         run: |
           cp .env.example .env
+          echo 'RATE_LIMIT_MULTIPLIER=100' >> .env
           node scripts/generate-keys.ts
           chmod 644 keys/jwt-private.pem
           docker compose up --detach --build --wait --wait-timeout 180
 
+      # The scanner's copy of the OpenAPI document carries the seeded ids and
+      # values the API accepts, so attacks get past validation
+      # (scripts/dast-openapi.ts).
       - name: Seed
-        id: seed
         if: ${{ steps.run.outputs.scan == 'true' }}
         run: |
-          ids="$(node scripts/seed.ts --token-file "$RUNNER_TEMP/zap-token")"
-          echo "ids=$ids" >> "$GITHUB_OUTPUT"
-          echo "Seeded: \`$ids\`" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p reports/zap
+          node scripts/seed.ts --credentials-file "$RUNNER_TEMP/dast-credentials.json" \
+            > "$RUNNER_TEMP/ids.json"
+          echo "Seeded: \`$(cat "$RUNNER_TEMP/ids.json")\`" >> "$GITHUB_STEP_SUMMARY"
+          curl --fail --silent --show-error http://127.0.0.1:3000/openapi.json \
+            --output "$RUNNER_TEMP/openapi.json"
+          node scripts/dast-openapi.ts "$RUNNER_TEMP/openapi.json" "$RUNNER_TEMP/ids.json" \
+            reports/zap/openapi.json
 
-      # The member's token reaches ZAP through the environment only, as an
-      # Authorization header restricted to the API's host. Path parameters
-      # take the seeded ids; the scan is throttled under the API's global rate
-      # limit (600 requests a minute per IP) and ends before the token expires
-      # (15 minutes). Exit codes 1 and 2 only report alerts: the gate below
-      # decides.
+      # The member's credentials reach ZAP through the environment only; the
+      # hook logs in, sends the token to the API's host only and logs in again
+      # before it expires. One thread, no delay: the raised limits leave room.
+      # Exit codes 1 and 2 only report alerts: the gates below decide.
       - name: Scan
         if: ${{ steps.run.outputs.scan == 'true' }}
         env:
-          IDS: ${{ steps.seed.outputs.ids }}
+          DAST_POLICY: ${{ steps.run.outputs.policy }}
+          BUDGET: ${{ steps.run.outputs.budget }}
         run: |
-          token="$(cat "$RUNNER_TEMP/zap-token")"
-          echo "::add-mask::$token"
-          export ZAP_AUTH_HEADER=Authorization ZAP_AUTH_HEADER_SITE=127.0.0.1
-          export ZAP_AUTH_HEADER_VALUE="Bearer $token"
-          options="-config scanner.threadPerHost=1 -config scanner.delayInMs=120"
-          options="$options -config scanner.maxScanDurationInMins=10 -config scanner.maxRuleDurationInMins=2"
-          index=0
-          for name in wsId projectId taskId userId invitationId; do
-            value="$(node -e 'process.stdout.write(JSON.parse(process.env.IDS)[process.argv[1]])' "$name")"
-            options="$options -config formhandler.fields.field($index).fieldId=$name"
-            options="$options -config formhandler.fields.field($index).value=$value"
-            options="$options -config formhandler.fields.field($index).enabled=true"
-            index=$((index + 1))
-          done
-          mkdir -p reports/zap
-          cp .zap/rules.tsv .zap/hooks.py reports/zap/
+          credentials="$RUNNER_TEMP/dast-credentials.json"
+          DAST_EMAIL="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).email)' "$credentials")"
+          DAST_PASSWORD="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1])).password)' "$credentials")"
+          echo "::add-mask::$DAST_PASSWORD"
+          export DAST_API=http://127.0.0.1:3000 DAST_EMAIL DAST_PASSWORD DAST_POLICY
+          options="-config scanner.threadPerHost=1 -config scanner.delayInMs=0"
+          options="$options -config scanner.maxScanDurationInMins=$BUDGET -config scanner.maxRuleDurationInMins=0"
+          cp .zap/hooks.py .zap/pr.policy reports/zap/
           # ZAP runs as uid 1000 inside its image and writes its reports here.
           chmod 777 reports/zap
           status=0
-          $SCAN -e ZAP_AUTH_HEADER -e ZAP_AUTH_HEADER_VALUE -e ZAP_AUTH_HEADER_SITE zap \
-            zap-api-scan.py -t http://127.0.0.1:3000/openapi.json -f openapi \
-            -c rules.tsv -J zap-report.json -r zap-report.html -I -T 15 \
+          $SCAN -e DAST_API -e DAST_EMAIL -e DAST_PASSWORD -e DAST_POLICY zap \
+            zap-api-scan.py -t /zap/wrk/openapi.json -f openapi -O http://127.0.0.1:3000 \
+            -J zap-report.json -r zap-report.html -I -T 15 \
             --hook /zap/wrk/hooks.py -z "$options" || status=$?
           if [ "$status" -gt 2 ]; then exit "$status"; fi
 
-      # The active scan is time-boxed: show what each rule covered.
       - name: Active scan coverage
         if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
         run: |
@@ -175,7 +195,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           sarif_file: reports/zap.sarif
-          category: zap
+          category: ${{ steps.run.outputs.mode == 'full' && 'zap-full' || 'zap' }}
 
       # Reports describe requests, never their headers; tokens are masked
       # anyway before they are kept.
@@ -191,7 +211,7 @@ jobs:
         if: ${{ !cancelled() && hashFiles('reports/zap/zap-report.json') != '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: zap-report-${{ github.run_attempt }}
+          name: zap-report-${{ steps.run.outputs.mode }}-${{ github.run_attempt }}
           path: |
             reports/zap/zap-report.json
             reports/zap/zap-report.html
@@ -207,7 +227,17 @@ jobs:
         run: docker compose down --volumes
 
       - name: Fail on High alerts
-        if: ${{ steps.report.outputs.high == 'true' }}
+        if: ${{ !cancelled() && steps.report.outputs.high == 'true' }}
         run: |
           echo '::error::ZAP raised High alerts: see the Security tab and the zap-report artifact.'
           exit 1
+
+      - name: Fail on an incomplete scan
+        if: ${{ !cancelled() && steps.run.outputs.scan == 'true' }}
+        env:
+          MODE: ${{ steps.run.outputs.mode }}
+        run: |
+          policy=()
+          if [ "$MODE" = pr ]; then policy=(--policy .zap/pr.policy); fi
+          node scripts/zap-coverage.ts reports/zap/active-scan.json "${policy[@]}" \
+            || { echo '::error::The active scan did not run every rule of its policy to the end.'; exit 1; }

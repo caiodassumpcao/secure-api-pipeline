@@ -8,10 +8,12 @@
  * the workspace, the project, the owner's task or the owner answers 403, so
  * the scan cannot destroy what it is scanning.
  *
- *   node scripts/seed.ts --token-file <path> [--api http://127.0.0.1:3000]
+ *   node scripts/seed.ts --credentials-file <path> [--api http://127.0.0.1:3000]
  *
- * Prints the resource ids as JSON. The member's access token is written to
- * --token-file (mode 0600), never to stdout. Every address uses example.test.
+ * Prints the resource ids as JSON. The member's email and password are written
+ * to --credentials-file as JSON (mode 0600), never to stdout: the scanner logs
+ * in with them and logs in again before the access token expires. Every
+ * address uses example.test.
  */
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
@@ -47,7 +49,12 @@ function client(apiUrl: string): Call {
 
 const PASSWORD = 'synthetic passphrase for the dast scan';
 
-async function account(call: Call, role: string): Promise<{ email: string; token: string }> {
+interface Account {
+  email: string;
+  token: string;
+}
+
+async function account(call: Call, role: string): Promise<Account> {
   const email = `dast-${role}-${randomUUID().slice(0, 8)}@example.test`;
   await call('POST', '/v1/auth/register', {
     body: { email, password: PASSWORD, name: `DAST ${role}` },
@@ -58,7 +65,7 @@ async function account(call: Call, role: string): Promise<{ email: string; token
   return { email, token: String(accessToken) };
 }
 
-export async function seed(apiUrl: string): Promise<{ ids: SeedIds; memberToken: string }> {
+export async function seed(apiUrl: string): Promise<{ ids: SeedIds; member: Account }> {
   const call = client(apiUrl);
   const owner = await account(call, 'owner');
   const me = await call('GET', '/v1/me', { bearer: owner.token });
@@ -102,19 +109,22 @@ export async function seed(apiUrl: string): Promise<{ ids: SeedIds; memberToken:
       userId: ownerId,
       invitationId: String(pending.id),
     },
-    memberToken: member.token,
+    member,
   };
 }
 
 async function main(argv: string[]): Promise<void> {
   const option = (name: string): string | undefined =>
     argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined;
-  const tokenFile = option('--token-file');
-  if (tokenFile === undefined) throw new Error('usage: seed.ts --token-file <path> [--api <url>]');
-  const { ids, memberToken } = await seed(option('--api') ?? 'http://127.0.0.1:3000');
+  const credentialsFile = option('--credentials-file');
+  if (credentialsFile === undefined) {
+    throw new Error('usage: seed.ts --credentials-file <path> [--api <url>]');
+  }
+  const { ids, member } = await seed(option('--api') ?? 'http://127.0.0.1:3000');
+  const credentials = JSON.stringify({ email: member.email, password: PASSWORD });
   // The path comes from the workflow's command line.
   // eslint-disable-next-line security/detect-non-literal-fs-filename
-  writeFileSync(tokenFile, memberToken, { mode: 0o600 });
+  writeFileSync(credentialsFile, credentials, { mode: 0o600 });
   process.stdout.write(`${JSON.stringify(ids)}\n`);
 }
 
